@@ -1,0 +1,48 @@
+# Vivado build and run directories
+.Xil/
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+*.gen/
+*.simvision/
+*.data/
+
+# Generated programming files and checkpoints
+*.ltx
+*.dcp
+*.bit
+*.bin
+
+# Vivado logs and journals
+*.log
+*.jou
+*.str
+vivado*.debug
+vivado*.zip
+vivado*.rst
+dfx_runtime.txt
+
+# Simulation waveforms
+*.wdb
+*.wcfg.bak
+*.vcd
+*.vpd
+
+# Editor and backup files
+*.backup.jou
+*.backup.log
+*.bak
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VScode
+*.code-workspace
+
+# Locally generated Vivado projects
+/build/
+*.xpr
