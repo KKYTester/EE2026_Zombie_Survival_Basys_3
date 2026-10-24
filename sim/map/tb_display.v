@@ -17,9 +17,9 @@ module tb_display;
     reg [15:0] fp;
     reg force_error=0;
     wire [15:0] pixel,hud_pixel,reference_hud;
-    hud_overlay hud(.px(px),.py(py),.minimap_mode(mode),.health(7'd99),.wave(7'd15),
+    hud_overlay hud(.px(px),.py(py),.minimap_mode(mode),.health(2'd3),.low_blink(1'b0),.wave(7'd15),.zombies(7'd0),
         .pixel_in(fp),.pixel_out(hud_pixel));
-    hud_reference hud_oracle(.px(px),.py(py),.minimap_mode(mode),.health(7'd99),.wave(7'd15),
+    hud_reference hud_oracle(.px(px),.py(py),.minimap_mode(mode),.health(2'd3),.low_blink(1'b0),.wave(7'd15),.zombies(7'd0),
         .pixel_in(fp),.expected(reference_hud));
     map_display_mux display(.px(px),.py(py),.minimap_mode(mode),.fp_pixel_data(hud_pixel),
         .map_bits(bits),.p1_addr(p1),.p2_addr(p2),.seed(seed),.map_ready(ready),
@@ -58,7 +58,7 @@ module tb_display;
             end
             $fclose(fd);
         end
-        mode=1; px=10; py=10; fp=16'hCAFE; #1;
+        mode=1; px=20; py=20; fp=16'hCAFE; #1;
         if(pixel!==16'hCAFE) begin failures=failures+1; $display("FAIL display: FP port passthrough"); end
         if(failures==0) $display("PASS display: all 6144 pixels in both modes, nonconstant FP pattern, HUD then 64x64 zoom, map occlusion and inset border");
         else $display("FAIL display total=%0d",failures);

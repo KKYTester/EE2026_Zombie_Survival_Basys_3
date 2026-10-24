@@ -1,9 +1,11 @@
 `timescale 1ns / 1ps
 // Test-only integer oracle: no dependency on hud_overlay or font3x5.
 module hud_reference(input wire [6:0] px, input wire [5:0] py,
-    input wire minimap_mode, input wire [6:0] health,wave,
+    input wire minimap_mode, input wire [1:0] health, input wire low_blink,
+    input wire [6:0] wave, input wire [6:0] zombies,
     input wire [15:0] pixel_in, output reg [15:0] expected);
-    integer h,w,x,y;
+    integer h,w,z,x,y,i;
+    reg [24:0] heart;
     function glyph_at;
         input integer id,ox,oy,xx,yy;
         reg [14:0] bitmap;
@@ -19,9 +21,8 @@ module hud_reference(input wire [6:0] px, input wire [5:0] py,
                 7: bitmap=15'b111001010010010;
                 8: bitmap=15'b111101111101111;
                 9: bitmap=15'b111101111001111;
-                10: bitmap=15'b101101111101101;
                 11: bitmap=15'b101101101111101;
-                12: bitmap=15'b110101110100100;
+                12: bitmap=15'b111001010100111;
                 default: bitmap=0;
             endcase
             glyph_at=0;
@@ -30,17 +31,17 @@ module hud_reference(input wire [6:0] px, input wire [5:0] py,
         end
     endfunction
     always @* begin
-        h=health; if(h>99) h=99;
-        w=wave; if(w>99) w=99;
+        heart=25'b01010_11111_11111_01110_00100;
+        h=health; w=wave; if(w>99) w=99;
+        z=zombies; if(z>99) z=99;
         x=px; y=py; expected=pixel_in;
         if(!minimap_mode || x<32) begin
             if(glyph_at(11,2,2,x,y) || glyph_at(w/10,8,2,x,y) || glyph_at(w%10,12,2,x,y) ||
-               glyph_at(10,2,51,x,y) || glyph_at(12,6,51,x,y) ||
-               glyph_at(h/10,12,51,x,y) || glyph_at(h%10,16,51,x,y)) expected=16'hFFFF;
-            if(x>=2 && x<=26 && y>=58 && y<=60) begin
-                expected=16'h4208;
-                if(x<2+h/4) expected=(h<25) ? 16'hF800 : 16'h07E0;
-            end
+               glyph_at(12,2,9,x,y) || glyph_at(z/10,8,9,x,y) || glyph_at(z%10,12,9,x,y))
+                expected=16'hFFFF;
+            for(i=0;i<3;i=i+1)
+                if(x>=2+6*i && x<7+6*i && y>=56 && y<=60 && heart[24-((y-56)*5+x-2-6*i)])
+                    expected = (i<h && !(h==1 && low_blink)) ? 16'hF800 : 16'h4208;
             if(!minimap_mode && ((x==48 && y>=30 && y<=34) ||
                                  (y==32 && x>=46 && x<=50))) expected=16'hFFFF;
         end

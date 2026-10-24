@@ -1,4 +1,12 @@
 `timescale 1ns / 1ps
+// Recursive-division map generator (rule C, polished).
+//  - Walls on even coordinates, doorways on odd coordinates.
+//  - Up to depth 4; rooms whose sides are both <= 10 tiles may stop early (25%).
+//  - Wall and door positions are chosen uniformly: index = (rand8 * count) >> 8.
+//  - Optional second door (50%) is kept only when at least 4 tiles from the
+//    first, so no isolated single wall tile is left between two gaps.
+//  - The finished map is randomly mirrored in x and/or y and/or transposed
+//    (8 symmetries, chosen by seed bits) by remapping write addresses.
 module map_generator #(parameter FIXED_MAP = 0)(
     input wire clk, input wire rst, input wire start,
     input wire [15:0] seed, output wire write_en,
@@ -7,12 +15,12 @@ module map_generator #(parameter FIXED_MAP = 0)(
     localparam S_IDLE=0;       // Wait for a generation request.
     localparam S_INIT=1;       // Write one initial/fixed tile per clock.
     localparam S_POP=2;        // Pop a region, or finish when the stack is empty.
-    localparam S_ORIENT=3;     // Choose the longer axis; break ties with the LFSR.
-    localparam S_WALL=4;       // Scan legal even wall positions, choosing one.
-    localparam S_DOOR_INIT=5;  // Initialise the odd-coordinate doorway search.
-    localparam S_DOOR=6;       // Scan odd doorway candidates, choosing one.
+    localparam S_ORIENT=3;     // Early stop, or choose the axis (longer side; LFSR tie-break).
+    localparam S_WALL=4;       // Choose an even wall position uniformly.
+    localparam S_DOOR_INIT=5;  // Advance the LFSR for the doorway choices.
+    localparam S_DOOR=6;       // Choose odd doorway(s) uniformly.
     localparam S_DRAW_INIT=7;  // Load the first tile of the chosen dividing wall.
-    localparam S_DRAW=8;       // Draw one wall tile (or the one doorway) per clock.
+    localparam S_DRAW=8;       // Draw one wall tile (or doorway) per clock.
     localparam S_PUSH=9;       // Push the two child regions at depth + 1.
     reg [3:0] state;
     reg [7:0] init_addr;
@@ -21,11 +29,10 @@ module map_generator #(parameter FIXED_MAP = 0)(
     reg [3:0] sp;
     reg [3:0] x0,y0,x1,y1, wall_pos,door_pos,draw_pos;
     reg [2:0] depth;
-    reg vertical, found;
+    reg vertical;
     reg want_second,second_found;
     reg [3:0] second_door;
-    localparam S_SECOND=10; // Scan distinct odd candidates for the optional second door.
-    reg [4:0] candidate;
+    reg [2:0] sym;             // {transpose, flip_y, flip_x}
     wire [15:0] random_value;
     wire [4:0] dx = {1'b0,x1} - {1'b0,x0};
     wire [4:0] dy = {1'b0,y1} - {1'b0,y0};
@@ -36,6 +43,26 @@ module map_generator #(parameter FIXED_MAP = 0)(
     wire advance_rng = (state == S_ORIENT) || (state == S_DOOR_INIT);
     lfsr16 rng(.clk(clk),.rst(rst),.load(start && state==S_IDLE),
         .advance(advance_rng),.seed(seed),.value(random_value));
+
+    // Even wall candidates: lower+2 <= w <= upper-2 (no wall touches a parent wall).
+    wire [4:0] wall_min = axis_lo + 5'd2 + {4'd0, axis_lo[0]};          // round up to even
+    wire [4:0] wall_hi2 = axis_hi - 5'd2;
+    wire [4:0] wall_max = wall_hi2 - {4'd0, wall_hi2[0]};               // round down to even
+    wire wall_ok = (axis_hi >= axis_lo + 5'd4) && (wall_min <= wall_max);
+    wire [4:0] wall_span = wall_max - wall_min;
+    wire [2:0] wall_count = wall_span[3:1] + 3'd1;                      // 1..7 candidates
+    wire [10:0] wall_prod = random_value[7:0] * wall_count;            // 8x3-bit multiply
+    wire [4:0] wall_pick = wall_min + {1'b0, wall_prod[10:8], 1'b0};
+    // Odd doorway candidates inside the wall's span.
+    wire [4:0] door_min = door_lo + {4'd0, ~door_lo[0]};
+    wire [4:0] door_max = door_hi - {4'd0, ~door_hi[0]};
+    wire [4:0] door_span = door_max - door_min;
+    wire [2:0] door_count = door_span[3:1] + 3'd1;
+    wire [10:0] door1_prod = random_value[7:0] * door_count;
+    wire [10:0] door2_prod = random_value[15:8] * door_count;
+    wire [4:0] door1_pick = door_min + {1'b0, door1_prod[10:8], 1'b0};
+    wire [4:0] door2_pick = door_min + {1'b0, door2_prod[10:8], 1'b0};
+    wire doors_far = (door2_pick >= door1_pick + 5'd4) || (door1_pick >= door2_pick + 5'd4);
 
     function [15:0] fixed_row;
         input [3:0] row;
@@ -51,23 +78,30 @@ module map_generator #(parameter FIXED_MAP = 0)(
     wire [15:0] initial_row = fixed_row(init_addr[7:4]);
     wire boundary = init_addr[3:0]==0 || init_addr[3:0]==15 ||
                     init_addr[7:4]==0 || init_addr[7:4]==15;
+    wire [7:0] raw_addr = state==S_INIT ? init_addr :
+                          (vertical ? {draw_pos,wall_pos} : {wall_pos,draw_pos});
+    // Symmetry remap: a bijection, so every tile is still written exactly once,
+    // the boundary stays closed and connectivity is unchanged.
+    wire [3:0] map_x = raw_addr[3:0] ^ {4{sym[0]}};
+    wire [3:0] map_y = raw_addr[7:4] ^ {4{sym[1]}};
     assign write_en = state==S_INIT || state==S_DRAW;
-    assign write_addr = state==S_INIT ? init_addr :
-                        (vertical ? {draw_pos,wall_pos} : {wall_pos,draw_pos});
+    assign write_addr = FIXED_MAP ? raw_addr : (sym[2] ? {map_x,map_y} : {map_y,map_x});
     assign write_wall = state==S_INIT ?
-        (FIXED_MAP ? initial_row[init_addr[3:0]] : boundary) : (draw_pos!=door_pos && (!second_found || draw_pos!=second_door));
+        (FIXED_MAP ? initial_row[init_addr[3:0]] : boundary) :
+        (draw_pos!=door_pos && (!second_found || draw_pos!=second_door));
     assign busy = state!=S_IDLE;
     always @(posedge clk) begin
         if (rst) begin
             state<=S_IDLE; done<=0; init_addr<=0; sp<=0;
             x0<=0; y0<=0; x1<=0; y1<=0; depth<=0;
-            wall_pos<=0; door_pos<=0; draw_pos<=0;
-            vertical<=0; found<=0; candidate<=0;
-            want_second<=0; second_found<=0; second_door<=0;
+            wall_pos<=0; door_pos<=0; draw_pos<=0; vertical<=0;
+            want_second<=0; second_found<=0; second_door<=0; sym<=0;
         end else begin
             done<=0;
             case (state)
-                S_IDLE: if (start) begin init_addr<=0; state<=S_INIT; end
+                S_IDLE: if (start) begin
+                    init_addr<=0; sym<=seed[15:13]; state<=S_INIT;
+                end
                 S_INIT: begin
                     if (init_addr==255) begin
                         if (FIXED_MAP) begin done<=1; state<=S_IDLE; end
@@ -86,53 +120,25 @@ module map_generator #(parameter FIXED_MAP = 0)(
                     end
                 end
                 S_ORIENT: begin
-                    if (depth>=4 || (depth>=2 && random_value[2:1]==2'b00)) state<=S_POP;
+                    if (depth>=4 || (depth>=2 && dx<=5'd9 && dy<=5'd9 &&
+                                     random_value[2:1]==2'b00)) state<=S_POP;
                     else begin
                         vertical <= (dx>dy) || ((dx==dy) && random_value[0]);
-                        candidate<=0; found<=0; state<=S_WALL;
+                        state<=S_WALL;
                     end
                 end
                 S_WALL: begin
-                    if (candidate==16) begin
-                        if (found) state<=S_DOOR_INIT;
-                        else state<=S_POP;
-                    end else begin
-                        // Addition comparisons avoid unsigned subtraction underflow.
-                        if (!candidate[0] && candidate>=axis_lo+5'd2 &&
-                            candidate+5'd2<=axis_hi) begin
-                            if (!found || random_value[candidate[3:0]])
-                                wall_pos<=candidate[3:0];
-                            found<=1;
-                        end
-                        candidate<=candidate+1'b1;
-                    end
+                    if (wall_ok) begin
+                        wall_pos<=wall_pick[3:0]; want_second<=random_value[8];
+                        state<=S_DOOR_INIT;
+                    end else state<=S_POP;
                 end
-                S_DOOR_INIT: begin
-                    candidate<=0; found<=0; second_found<=0;
-                    want_second<=random_value[3]; state<=S_DOOR;
-                end
+                S_DOOR_INIT: state<=S_DOOR;
                 S_DOOR: begin
-                    if (candidate==16) begin candidate<=0; state<=S_SECOND; end
-                    else begin
-                        if (candidate[0] && candidate>=door_lo && candidate<=door_hi) begin
-                            if (!found || random_value[candidate[3:0]])
-                                door_pos<=candidate[3:0];
-                            found<=1;
-                        end
-                        candidate<=candidate+1'b1;
-                    end
-                end
-                S_SECOND: begin
-                    if (!want_second || candidate==16) state<=S_DRAW_INIT;
-                    else begin
-                        if(candidate[0] && candidate>=door_lo && candidate<=door_hi &&
-                           candidate[3:0]!=door_pos) begin
-                            if(!second_found || random_value[candidate[3:0]])
-                                second_door<=candidate[3:0];
-                            second_found<=1;
-                        end
-                        candidate<=candidate+1'b1;
-                    end
+                    door_pos<=door1_pick[3:0];
+                    second_door<=door2_pick[3:0];
+                    second_found<=want_second && doors_far;
+                    state<=S_DRAW_INIT;
                 end
                 S_DRAW_INIT: begin draw_pos<=door_lo[3:0]; state<=S_DRAW; end
                 S_DRAW: begin
