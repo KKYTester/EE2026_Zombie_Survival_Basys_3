@@ -29,11 +29,12 @@ set_property -dict {PACKAGE_PIN A17 IOSTANDARD LVCMOS33} [get_ports {JB[5]}]
 set_property -dict {PACKAGE_PIN C15 IOSTANDARD LVCMOS33} [get_ports {JB[6]}]
 set_property -dict {PACKAGE_PIN C16 IOSTANDARD LVCMOS33} [get_ports {JB[7]}]
 # Related generated clock: frame snapshots are timed, not false-pathed.
-create_generated_clock -name oled_clk -source [get_ports clk] -divide_by 16 [get_pins {clk_div_reg[3]/Q}]
+# game_core instance is named 'game' in map_preview_top; in My_Top_Module use that instance's name.
+create_generated_clock -name oled_clk -source [get_ports clk] -divide_by 16 [get_pins {game/clk_div_reg[3]/Q}]
 # Only external asynchronous inputs up to their first synchronizer are exempt.
 set_false_path -from [get_ports btnU] -to [get_pins {reset_sync_reg[0]/D}]
-set_false_path -from [get_ports sw0] -to [get_pins {switch_sync_reg[0]/D}]
-set_false_path -from [get_ports btnC] -to [get_pins {button_filter/sync_ff_reg[0]/D}]
+set_false_path -from [get_ports sw0] -to [get_pins {game/switch_sync_reg[0]/D}]
+set_false_path -from [get_ports btnC] -to [get_pins {game/button_filter/sync_ff_reg[0]/D}]
 # ASSUMPTION: reserve 20 ns external setup budget for SPI data/control.
 # The course driver changes data on falling OLED-clock edges.
 set_output_delay -clock oled_clk -max 20 [get_ports {JB[0] JB[1] JB[4]}]
@@ -61,7 +62,7 @@ set_property -dict {PACKAGE_PIN W4 IOSTANDARD LVCMOS33} [get_ports {an[3]}]
 # Menu buttons (debounced; first synchronizer stage exempt like btnC).
 set_property -dict {PACKAGE_PIN W19 IOSTANDARD LVCMOS33} [get_ports btnL]
 set_property -dict {PACKAGE_PIN T17 IOSTANDARD LVCMOS33} [get_ports btnR]
-set_false_path -from [get_ports btnL] -to [get_pins {button_left/sync_ff_reg[0]/D}]
+set_false_path -from [get_ports btnL] -to [get_pins {game/button_left/sync_ff_reg[0]/D}]
 set_false_path -from [get_ports btnR] -to [get_pins {button_right/sync_ff_reg[0]/D}]
 # btnD: test 'take damage' button during play (stand-in until combat exists).
 set_property -dict {PACKAGE_PIN U17 IOSTANDARD LVCMOS33} [get_ports btnD]

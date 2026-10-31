@@ -1,17 +1,20 @@
 `timescale 1ns / 1ps
 // First-person weapon: a pistol held in the right hand, bottom-centre of the
 // play view (28x24 sprite at x=41..68, y=40..63). recoil moves it down 2 px;
+// drop lowers it further during a reload (31 = off the bottom of the screen);
 // flash draws a muzzle flash above the slide. Drawn over the world, under the
 // HUD (crosshair stays on top). Combinational; sprite ROM generated from
 // gun_sprite.py (palette index per pixel, 0 = transparent).
 module weapon_overlay(input wire [6:0] px, input wire [5:0] py,
-    input wire show, input wire recoil, input wire flash,
+    input wire show, input wire recoil, input wire flash, input wire [4:0] drop,
     input wire [15:0] pixel_in, output reg [15:0] pixel_out);
     localparam X0=41, Y0=40, W=28, H=24, FX=44, FW=10, FH=6;
-    wire [5:0] gy0 = recoil ? Y0+2 : Y0;
+    // 7-bit rows: a lowered gun may start below the last screen row.
+    wire [6:0] gy0 = (recoil ? 7'd42 : 7'd40) + {2'b00,drop};
+    wire [6:0] row = {1'b0,py};
     wire [6:0] sx = px - X0;
-    wire [5:0] sy = py - gy0;
-    wire in_gun = show && px>=X0 && px<X0+W && py>=gy0 && sy<H;
+    wire [6:0] sy = row - gy0;
+    wire in_gun = show && px>=X0 && px<X0+W && row>=gy0 && sy<H;
     reg [111:0] gun_row;
     always @* begin
         case(sy)
@@ -43,10 +46,10 @@ module weapon_overlay(input wire [6:0] px, input wire [5:0] py,
         endcase
     end
     wire [3:0] gun_index = gun_row[111-sx*4 -: 4];
-    wire [5:0] fy0 = gy0 - FH;
+    wire [6:0] fy0 = gy0 - FH;
     wire [6:0] fx = px - FX;
-    wire [5:0] fy = py - fy0;
-    wire in_flash = show && flash && px>=FX && px<FX+FW && py>=fy0 && fy<FH;
+    wire [6:0] fy = row - fy0;
+    wire in_flash = show && flash && px>=FX && px<FX+FW && row>=fy0 && fy<FH;
     reg [39:0] flash_row;
     always @* begin
         case(fy)

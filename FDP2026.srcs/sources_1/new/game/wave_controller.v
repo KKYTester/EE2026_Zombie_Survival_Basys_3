@@ -9,11 +9,13 @@
 //  - enemy_defeated pulses count kills. When every zombie of the wave is
 //    spawned and defeated, wave_clear is high for 2^CLEAR_SHIFT clocks
 //    (~1.3 s), then the next wave starts.
+//  - Win: when wave WIN_WAVE is cleared (after its WAVE CLEAR pause), game_won
+//    goes high and stays high until play ends. WIN_WAVE=0 means endless waves.
 // Interface to the enemy module (Member 2): spawn_req/spawn_tile -> spawn_ack,
 // and one enemy_defeated pulse per zombie killed.
 module wave_controller #(parameter MAX_ALIVE=8, parameter MAX_WAVE_SIZE=21,
                          parameter SPAWN_SHIFT=26, parameter CLEAR_SHIFT=27,
-                         parameter MIN_DIST=8)(
+                         parameter MIN_DIST=8, parameter WIN_WAVE=10)(
     input wire clk, input wire rst,
     input wire play_start, input wire playing,
     input wire [255:0] map_bits, input wire [255:0] occupied,
@@ -23,8 +25,9 @@ module wave_controller #(parameter MAX_ALIVE=8, parameter MAX_WAVE_SIZE=21,
     output reg spawn_req, output reg [7:0] spawn_tile,
     output reg [5:0] alive,
     output wire [6:0] remaining,          // zombies of this wave not yet defeated
-    output reg wave_clear);
-    localparam W_IDLE=3'd0, W_WAIT=3'd1, W_FIND=3'd2, W_REQ=3'd3, W_CLEAR=3'd4;
+    output reg wave_clear,
+    output reg game_won);
+    localparam W_IDLE=3'd0, W_WAIT=3'd1, W_FIND=3'd2, W_REQ=3'd3, W_CLEAR=3'd4, W_WON=3'd5;
     localparam MAX_SHIFT = (SPAWN_SHIFT > CLEAR_SHIFT) ? SPAWN_SHIFT : CLEAR_SHIFT;
     localparam [6:0] WAVE_CAP = MAX_WAVE_SIZE;
     localparam [5:0] ALIVE_CAP = MAX_ALIVE;
@@ -50,14 +53,14 @@ module wave_controller #(parameter MAX_ALIVE=8, parameter MAX_WAVE_SIZE=21,
     always @(posedge clk) begin
         if(rst) begin
             state<=W_IDLE; timer<=0; wave<=1; total<=3; spawned<=0; killed<=0; alive<=0;
-            spawn_req<=0; spawn_tile<=0; wave_clear<=0; finder_start<=0;
+            spawn_req<=0; spawn_tile<=0; wave_clear<=0; finder_start<=0; game_won<=0;
         end else begin
             finder_start<=0;
             if(play_start) begin
                 state<=W_WAIT; timer<=0; wave<=1; total<=3; spawned<=0; killed<=0; alive<=0;
-                spawn_req<=0; wave_clear<=0;
+                spawn_req<=0; wave_clear<=0; game_won<=0;
             end else if(!playing) begin
-                state<=W_IDLE; spawn_req<=0; wave_clear<=0;
+                state<=W_IDLE; spawn_req<=0; wave_clear<=0; game_won<=0;
             end else begin
                 // Kills can arrive in any state; never count below zero.
                 if(enemy_defeated && alive!=0) begin
@@ -83,13 +86,16 @@ module wave_controller #(parameter MAX_ALIVE=8, parameter MAX_WAVE_SIZE=21,
                         state<=W_WAIT;
                     end
                     W_CLEAR: begin
-                        if(timer[CLEAR_SHIFT]) begin
+                        if(timer[CLEAR_SHIFT] && WIN_WAVE!=0 && wave==WIN_WAVE) begin
+                            wave_clear<=0; game_won<=1; state<=W_WON;   // last wave survived
+                        end else if(timer[CLEAR_SHIFT]) begin
                             wave_clear<=0; timer<=0; spawned<=0; killed<=0;
                             if(wave!=7'd99) wave<=wave+1'b1;
                             total <= (next_size>{1'b0,WAVE_CAP}) ? WAVE_CAP : next_size[6:0];
                             state<=W_WAIT;
                         end else timer<=timer+1'b1;
                     end
+                    W_WON: ;                                 // nothing spawns after the win
                     default: state<=W_WAIT;
                 endcase
             end

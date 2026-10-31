@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
-// Single-player game flow: TITLE -> GENERATING -> COUNTDOWN -> PLAYING -> GAME OVER -> TITLE.
+// Single-player game flow:
+//   TITLE -> GENERATING -> COUNTDOWN -> PLAYING -> GAME OVER -> TITLE
+//                                              \-> VICTORY  -> TITLE
 //  - Title: mouse hover highlights an option, left-click on it confirms.
 //    Buttons work too: btnL/btnR move the selection, btnC confirms.
 //  - The 2-player option is shown but disabled unless ENABLE_2P = 1
@@ -9,8 +11,10 @@
 //    counter holds at that moment) and shows the screen for at least
 //    2^GEN_SHIFT clocks so the player can read it.
 //  - Countdown: 3, 2, 1, each 2^COUNT_SHIFT clocks, then PLAYING (play_start pulses).
-//  - Playing ends when health reaches 0. Game over ignores input for
-//    2^OVER_SHIFT clocks (over_ready=0), then a click or btnC returns to the title.
+//  - Playing ends when health reaches 0 (GAME OVER) or when the last wave is
+//    survived (game_won, VICTORY); losing the last heart wins over winning.
+//    Both end screens ignore input for 2^OVER_SHIFT clocks (over_ready=0),
+//    then a click or btnC returns to the title.
 module game_flow #(parameter ENABLE_2P = 0, parameter GEN_SHIFT = 26,
                    parameter COUNT_SHIFT = 26, parameter OVER_SHIFT = 27)(
     input wire clk, input wire rst,
@@ -18,15 +22,15 @@ module game_flow #(parameter ENABLE_2P = 0, parameter GEN_SHIFT = 26,
     input wire [6:0] mouse_x, input wire [5:0] mouse_y,
     input wire mouse_left, input wire mouse_event,
     input wire map_ready, input wire map_busy,
-    input wire health_zero,
-    output reg [2:0] state,            // 0 title, 1 generating, 2 countdown, 3 playing, 4 game over
+    input wire health_zero, input wire game_won,
+    output reg [2:0] state,            // 0 title, 1 generating, 2 countdown, 3 playing, 4 game over, 5 victory
     output reg sel,                    // 0 = 1 PLAYER, 1 = 2 PLAYERS
     output reg regenerate,             // one-clock new-map request
     output reg play_start,             // one-clock pulse when playing begins
     output reg [1:0] count_digit,
     output wire [5:0] progress,
     output wire over_ready);
-    localparam S_TITLE=3'd0, S_GEN=3'd1, S_COUNT=3'd2, S_PLAY=3'd3, S_OVER=3'd4;
+    localparam S_TITLE=3'd0, S_GEN=3'd1, S_COUNT=3'd2, S_PLAY=3'd3, S_OVER=3'd4, S_WIN=3'd5;
     localparam MAX_A = (GEN_SHIFT > COUNT_SHIFT) ? GEN_SHIFT : COUNT_SHIFT;
     localparam MAX_SHIFT = (MAX_A > OVER_SHIFT) ? MAX_A : OVER_SHIFT;
     // Option rectangles, identical to menu_screens.
@@ -43,7 +47,7 @@ module game_flow #(parameter ENABLE_2P = 0, parameter GEN_SHIFT = 26,
     wire step_done = timer[COUNT_SHIFT];
     wire over_done = timer[OVER_SHIFT];
     assign progress = (state!=S_GEN) ? 6'd0 : (gen_done ? 6'd63 : timer[GEN_SHIFT-1 -: 6]);
-    assign over_ready = (state==S_OVER) && over_done;
+    assign over_ready = (state==S_OVER || state==S_WIN) && over_done;
     always @(posedge clk) begin
         if(rst) begin
             state<=S_TITLE; sel<=0; regenerate<=0; play_start<=0; count_digit<=3; timer<=0;
@@ -80,10 +84,11 @@ module game_flow #(parameter ENABLE_2P = 0, parameter GEN_SHIFT = 26,
                     end else timer<=timer+1'b1;
                 end
                 S_PLAY: begin
-                    // Mouse and btnC are left to the game; only death leaves this state.
+                    // Mouse and btnC are left to the game; only death or the win leave.
                     if(health_zero && !play_start) begin state<=S_OVER; timer<=0; end
+                    else if(game_won && !play_start) begin state<=S_WIN; timer<=0; end
                 end
-                S_OVER: begin
+                S_OVER, S_WIN: begin
                     if(!over_done) timer<=timer+1'b1;
                     else if(btn_c || click) state<=S_TITLE;
                 end
