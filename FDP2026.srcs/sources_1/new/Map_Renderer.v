@@ -23,10 +23,9 @@ module Map_Renderer (
     reg [31:0] dx = 32'd0;
     reg [31:0] dy = 32'd0;
     reg [31:0] omega = 32'd0;
-    wire [31:0] x_coord = 32'd0;
-    wire [31:0] y_coord = 32'd0;
-    wire [31:0] theta = 32'd0;
+    wire [31:0] x_coord, y_coord, theta;
     Player Player_one(
+        .reset    (1),
         .game_clk (game_clk ),
         .dx       (dx       ),
         .dy       (dy       ),
