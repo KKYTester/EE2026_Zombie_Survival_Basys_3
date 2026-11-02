@@ -10,7 +10,14 @@
 
 module My_Top_Module (input clk, output [7:0] JB);
     wire clk_6p25mhz;
-    wire reset;
+    // Hold reset for 255 system-clock cycles after FPGA configuration, long
+    // enough to also be sampled by the existing 6.25 MHz OLED interface clock.
+    reg [7:0] startup_counter = 8'd0;
+    wire reset = (startup_counter != 8'hff);
+    always @(posedge clk) begin
+        if (reset)
+            startup_counter <= startup_counter + 1'b1;
+    end
     wire frame_begin, sending_pixels, sample_pixel;
     wire [12:0] pixel_index;
     wire [15:0] pixel_data = 15'b00000_111111_11111;
@@ -42,6 +49,7 @@ module My_Top_Module (input clk, output [7:0] JB);
     wire [15:0] map_renderer_pixel_data;
     Map_Renderer u_Map_Renderer(
         .clk        (clk        ),
+        .reset      (reset      ),
         .pixel_data (map_renderer_pixel_data )
     );
     
