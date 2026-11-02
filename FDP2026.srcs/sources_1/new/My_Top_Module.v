@@ -13,7 +13,7 @@ module My_Top_Module (input clk, output [7:0] JB);
     wire reset;
     wire frame_begin, sending_pixels, sample_pixel;
     wire [12:0] pixel_index;
-    reg [15:0] pixel_data = 15'b00000_111111_11111;
+    wire [15:0] pixel_data = 15'b00000_111111_11111;
 
     localparam divider_6p25mhz = 32'd7;
     Clk_Divider u_Clk_Divider (
@@ -39,6 +39,14 @@ module My_Top_Module (input clk, output [7:0] JB);
         .pmoden         (JB[7]         )
     );
 
+    wire [15:0] map_renderer_pixel_data;
+    Map_Renderer u_Map_Renderer(
+        .clk        (clk        ),
+        .pixel_data (map_renderer_pixel_data )
+    );
+    
+    // TODO: Some kind of game state manager 
+    // TODO: Game state manager has to choose which modules pixel_data to use
 
 
 endmodule
