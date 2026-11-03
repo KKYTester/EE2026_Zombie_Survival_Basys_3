@@ -3,7 +3,7 @@
 // interface spec. Instantiate this once in My_Top_Module.
 //
 //  - Map: generator + validator (map_system), one new map per game.
-//  - Game flow: title -> generating -> countdown -> playing -> game over / victory.
+//  - Game flow: title -> generating -> playing -> game over / victory.
 //  - Waves and spawn selection (spawn handshake to the enemy module).
 //  - Player health (3 hearts; one heart per player_hit pulse), weapon (6-round
 //    magazine, reload FSM), shot_fired to combat.
@@ -18,8 +18,8 @@
 // All signals are in the 100 MHz clk domain; rst is synchronous, active high.
 module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     parameter ENABLE_2P=0, parameter SHOW_CURSOR=1,
-    parameter GEN_SHIFT=26, parameter COUNT_SHIFT=26, parameter OVER_SHIFT=27,
-    parameter TINT_SHIFT=25, parameter BANNER_SHIFT=27, parameter BLINK_SHIFT=24,
+    parameter GEN_SHIFT=26, parameter OVER_SHIFT=27,
+    parameter TINT_SHIFT=25, parameter BLINK_SHIFT=24,
     parameter SPAWN_SHIFT=26, parameter CLEAR_SHIFT=27,
     parameter FLASH_SHIFT=22, parameter RECOIL_SHIFT=23, parameter RELOAD_SHIFT=25,
     parameter WIN_WAVE=10)(
@@ -78,10 +78,9 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     wire [2:0] retry_count;
     wire [15:0] seed;
     wire [2:0] flow_state;
-    wire [1:0] count_digit;
     wire menu_sel,regenerate,over_ready;
     wire [5:0] progress;
-    wire damage,tint,banner,low_blink;
+    wire damage,tint,low_blink;
     wire wave_clear,game_won;
     wire [5:0] alive;
     wire [6:0] remaining;
@@ -105,13 +104,13 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     // Free-running seed source: the time spent on the title screen picks the map.
     reg [15:0] seed_counter;
     always @(posedge clk) if(rst) seed_counter<=1; else seed_counter<=seed_counter+1'b1;
-    game_flow #(.ENABLE_2P(ENABLE_2P),.GEN_SHIFT(GEN_SHIFT),.COUNT_SHIFT(COUNT_SHIFT),
+    game_flow #(.ENABLE_2P(ENABLE_2P),.GEN_SHIFT(GEN_SHIFT),
         .OVER_SHIFT(OVER_SHIFT)) flow(
         .clk(clk),.rst(rst),.btn_c(press_c),.btn_l(press_l),.btn_r(1'b0),
         .mouse_x(mouse_x),.mouse_y(mouse_y),.mouse_left(mouse_left),.mouse_event(mouse_event),
         .map_ready(ready),.map_busy(busy),.health_zero(health==2'd0),.game_won(game_won),
         .state(flow_state),.sel(menu_sel),.regenerate(regenerate),.play_start(play_start),
-        .count_digit(count_digit),.progress(progress),.over_ready(over_ready));
+        .progress(progress),.over_ready(over_ready));
     player_health hearts(.clk(clk),.rst(rst),.play_start(play_start),
         .playing(playing_now),.hit(player_hit),.health(health),.damage(damage));
     wave_controller #(.SPAWN_SHIFT(SPAWN_SHIFT),.CLEAR_SHIFT(CLEAR_SHIFT),.WIN_WAVE(WIN_WAVE)) waves(
@@ -120,10 +119,10 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.wave(wave),
         .spawn_req(spawn_req),.spawn_tile(spawn_tile),.alive(alive),
         .remaining(remaining),.wave_clear(wave_clear),.game_won(game_won));
-    hud_effects_ctrl #(.TINT_SHIFT(TINT_SHIFT),.BANNER_SHIFT(BANNER_SHIFT),
+    hud_effects_ctrl #(.TINT_SHIFT(TINT_SHIFT),
         .BLINK_SHIFT(BLINK_SHIFT)) effects_ctrl(
-        .clk(clk),.rst(rst),.playing(playing_now),.play_start(play_start),.damage(damage),
-        .wave(wave),.health(health),.tint(tint),.banner(banner),.low_blink(low_blink));
+        .clk(clk),.rst(rst),.playing(playing_now),.damage(damage),
+        .health(health),.tint(tint),.low_blink(low_blink));
     weapon_ctrl #(.FLASH_SHIFT(FLASH_SHIFT),.RECOIL_SHIFT(RECOIL_SHIFT),
         .RELOAD_SHIFT(RELOAD_SHIFT)) weapon(
         .clk(clk),.rst(rst),.playing(playing_now),.fire(fire_request),.reload(reload_request),
@@ -177,14 +176,13 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     reg [1:0] frame_health;
     reg [6:0] frame_wave,frame_remaining;
     reg [255:0] frame_zombies;
-    reg frame_clear,frame_flash,frame_recoil,frame_reloading;
+    reg frame_flash,frame_recoil,frame_reloading;
     reg [2:0] frame_ammo;
     reg [4:0] frame_drop;
     reg frame_ready,frame_busy,frame_mode;
     reg [2:0] frame_error;
     reg [2:0] frame_screen;
-    reg [1:0] frame_digit;
-    reg frame_sel,frame_tint,frame_banner,frame_blink,frame_over_ready;
+    reg frame_sel,frame_tint,frame_blink,frame_over_ready;
     reg [6:0] frame_cx; reg [5:0] frame_cy;
     reg [5:0] frame_progress;
     // Related clocks, explicitly constrained in XDC, not asynchronous CDC.
@@ -193,80 +191,54 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     always @(posedge oled_clk) begin
         if(oled_reset) begin
             frame_map<={256{1'b1}}; frame_p1<=0; frame_p2<=0; frame_seed<=0;
-            frame_health<=3; frame_wave<=1; frame_remaining<=0; frame_zombies<=0; frame_clear<=0;
+            frame_health<=3; frame_wave<=1; frame_remaining<=0; frame_zombies<=0;
             frame_flash<=0; frame_recoil<=0; frame_reloading<=0; frame_ammo<=6; frame_drop<=0;
             frame_ready<=0; frame_busy<=1; frame_mode<=0; frame_error<=0;
-            frame_screen<=0; frame_digit<=3; frame_sel<=0;
+            frame_screen<=0; frame_sel<=0;
             frame_cx<=48; frame_cy<=40; frame_progress<=0;
-            frame_tint<=0; frame_banner<=0; frame_blink<=0; frame_over_ready<=0;
+            frame_tint<=0; frame_blink<=0; frame_over_ready<=0;
         end else if(oled_frame_begin) begin
             frame_map<=published_map; frame_p1<=p1_addr; frame_p2<=p2_addr;
             frame_health<=health; frame_wave<=wave;
-            frame_remaining<=remaining; frame_zombies<=zombies; frame_clear<=wave_clear;
+            frame_remaining<=remaining; frame_zombies<=zombies;
             frame_flash<=weapon_flash; frame_recoil<=weapon_recoil;
             frame_reloading<=weapon_reloading; frame_ammo<=ammo; frame_drop<=weapon_drop;
             frame_seed<=seed; frame_ready<=ready; frame_busy<=busy;
             frame_mode<=switch_sync[1]; frame_error<=error_code;
-            frame_screen<=flow_state; frame_digit<=count_digit; frame_sel<=menu_sel;
+            frame_screen<=flow_state; frame_sel<=menu_sel;
             frame_cx<=mouse_x; frame_cy<=mouse_y; frame_progress<=progress;
-            frame_tint<=tint; frame_banner<=banner; frame_blink<=low_blink;
+            frame_tint<=tint; frame_blink<=low_blink;
             frame_over_ready<=over_ready;
         end
     end
-    wire playing = frame_screen==3'd3;
-    // Menu screen numbers: 0 title, 1 generating, 2 countdown, 3 game over, 4 victory.
-    wire [2:0] menu_screen = (frame_screen==3'd4) ? 3'd3 : (frame_screen==3'd5) ? 3'd4 : frame_screen;
-    wire [3:0] wave_tens,wave_ones;
-    wave_digits frame_wave_digits(.value(frame_wave),.tens(wave_tens),.ones(wave_ones));
-    wire [15:0] gun_pixel_data,hud_pixel_data,ammo_pixel_data,map_pixel_data,zombie_pixel_data,play_pixel_data,menu_pixel_data;
-    weapon_overlay gun(.px(px),.py(py),.show(!frame_mode),.recoil(frame_recoil),.flash(frame_flash),
-        .drop(frame_drop),.pixel_in(world_now),.pixel_out(gun_pixel_data));
-    hud_overlay hud(.px(px),.py(py),.minimap_mode(frame_mode),.health(frame_health),
-        .low_blink(frame_blink),.wave(frame_wave),.zombies(frame_remaining),
-        .pixel_in(gun_pixel_data),.pixel_out(hud_pixel_data));
-    ammo_overlay ammo_hud(.px(px),.py(py),.show(!frame_mode),.ammo(frame_ammo),
-        .reloading(frame_reloading),.pixel_in(hud_pixel_data),.pixel_out(ammo_pixel_data));
-    map_display_mux display_mux(.px(px),.py(py),.minimap_mode(frame_mode),
-        .fp_pixel_data(ammo_pixel_data),.map_bits(frame_map),.p1_addr(frame_p1),
-        .p2_addr(frame_p2),.seed(frame_seed),.map_ready(frame_ready),
-        .busy(frame_busy),.bfs_enabled(STAGE==3),.error_code(frame_error),
-        .pixel_data(map_pixel_data));
-    zombie_overlay zombie_dots(.px(px),.py(py),.minimap_mode(frame_mode),.zombies(frame_zombies),
-        .pixel_in(map_pixel_data),.pixel_out(zombie_pixel_data));
-    play_effects effects(.px(px),.py(py),.pixel_in(zombie_pixel_data),.tint(frame_tint),
-        .banner(frame_banner),.clear(frame_clear),.wave_tens(wave_tens),.wave_ones(wave_ones),
-        .pixel_out(play_pixel_data));
-    menu_screens #(.ENABLE_2P(ENABLE_2P)) menu(.px(px),.py(py),.screen(menu_screen),
-        .sel(frame_sel),.cursor_x(frame_cx),.cursor_y(frame_cy),.show_cursor(SHOW_CURSOR!=0),
-        .count_digit(frame_digit),.progress(frame_progress),.wave_tens(wave_tens),
-        .wave_ones(wave_ones),.over_ready(frame_over_ready),.pixel(menu_pixel_data));
-    wire [15:0] pixel_data = playing ? play_pixel_data : menu_pixel_data;
+    // One drawing-chain definition, evaluated at the current and final pixels.
+    wire [15:0] pixel_data,last_pixel_data;
+    pixel_compositor #(.STAGE(STAGE),.ENABLE_2P(ENABLE_2P),.SHOW_CURSOR(SHOW_CURSOR)) compositor(
+        .px(px),.py(py),.world_pixel(world_now),
+        .game_state(frame_screen),.minimap_mode(frame_mode),
+        .map_bits(frame_map),.p1_addr(frame_p1),.p2_addr(frame_p2),.seed(frame_seed),
+        .map_ready(frame_ready),.map_busy(frame_busy),.error_code(frame_error),
+        .health(frame_health),.low_blink(frame_blink),.wave(frame_wave),.remaining(frame_remaining),
+        .zombie_tiles(frame_zombies),.tint(frame_tint),
+        .weapon_recoil(frame_recoil),.weapon_flash(frame_flash),.weapon_reloading(frame_reloading),
+        .ammo(frame_ammo),.weapon_drop(frame_drop),
+        .menu_sel(frame_sel),.cursor_x(frame_cx),.cursor_y(frame_cy),
+        .progress(frame_progress),.over_ready(frame_over_ready),.pixel_out(pixel_data));
+
+    // The course OLED driver omits (95,63); the bridge sends this same composition.
+    pixel_compositor #(.STAGE(STAGE),.ENABLE_2P(ENABLE_2P),.SHOW_CURSOR(SHOW_CURSOR)) last_pixel_compositor(
+        .px(7'd95),.py(6'd63),.world_pixel(world_last),
+        .game_state(frame_screen),.minimap_mode(frame_mode),
+        .map_bits(frame_map),.p1_addr(frame_p1),.p2_addr(frame_p2),.seed(frame_seed),
+        .map_ready(frame_ready),.map_busy(frame_busy),.error_code(frame_error),
+        .health(frame_health),.low_blink(frame_blink),.wave(frame_wave),.remaining(frame_remaining),
+        .zombie_tiles(frame_zombies),.tint(frame_tint),
+        .weapon_recoil(frame_recoil),.weapon_flash(frame_flash),.weapon_reloading(frame_reloading),
+        .ammo(frame_ammo),.weapon_drop(frame_drop),
+        .menu_sel(frame_sel),.cursor_x(frame_cx),.cursor_y(frame_cy),
+        .progress(frame_progress),.over_ready(frame_over_ready),.pixel_out(last_pixel_data));
+
     wire raw_cs,raw_sdin,raw_sclk,raw_dcn;
-    wire [15:0] last_gun_pixel_data,last_hud_pixel_data,last_ammo_pixel_data,last_map_pixel_data,last_zombie_pixel_data,last_play_pixel_data,last_menu_pixel_data;
-    // Pixel (95,63) is sent separately by oled_tail_bridge: evaluate it through
-    // the same HUD, map, effects and menu logic for a single source of truth.
-    weapon_overlay last_gun(.px(7'd95),.py(6'd63),.show(!frame_mode),.recoil(frame_recoil),
-        .flash(frame_flash),.drop(frame_drop),.pixel_in(world_last),.pixel_out(last_gun_pixel_data));
-    hud_overlay last_hud(.px(7'd95),.py(6'd63),.minimap_mode(frame_mode),.health(frame_health),
-        .low_blink(frame_blink),.wave(frame_wave),.zombies(frame_remaining),
-        .pixel_in(last_gun_pixel_data),.pixel_out(last_hud_pixel_data));
-    ammo_overlay last_ammo(.px(7'd95),.py(6'd63),.show(!frame_mode),.ammo(frame_ammo),
-        .reloading(frame_reloading),.pixel_in(last_hud_pixel_data),.pixel_out(last_ammo_pixel_data));
-    map_display_mux last_pixel_mux(.px(7'd95),.py(6'd63),.minimap_mode(frame_mode),
-        .fp_pixel_data(last_ammo_pixel_data),.map_bits(frame_map),.p1_addr(frame_p1),
-        .p2_addr(frame_p2),.seed(frame_seed),.map_ready(frame_ready),
-        .busy(frame_busy),.bfs_enabled(STAGE==3),.error_code(frame_error),
-        .pixel_data(last_map_pixel_data));
-    zombie_overlay last_zombie_dots(.px(7'd95),.py(6'd63),.minimap_mode(frame_mode),
-        .zombies(frame_zombies),.pixel_in(last_map_pixel_data),.pixel_out(last_zombie_pixel_data));
-    play_effects last_effects(.px(7'd95),.py(6'd63),.pixel_in(last_zombie_pixel_data),
-        .tint(frame_tint),.banner(frame_banner),.clear(frame_clear),.wave_tens(wave_tens),.wave_ones(wave_ones),
-        .pixel_out(last_play_pixel_data));
-    menu_screens #(.ENABLE_2P(ENABLE_2P)) last_menu(.px(7'd95),.py(6'd63),.screen(menu_screen),
-        .sel(frame_sel),.cursor_x(frame_cx),.cursor_y(frame_cy),.show_cursor(SHOW_CURSOR!=0),
-        .count_digit(frame_digit),.progress(frame_progress),.wave_tens(wave_tens),
-        .wave_ones(wave_ones),.over_ready(frame_over_ready),.pixel(last_menu_pixel_data));
-    wire [15:0] last_pixel_data = playing ? last_play_pixel_data : last_menu_pixel_data;
     Oled_Display oled(.clk(oled_clk),.reset(oled_reset),.frame_begin(oled_frame_begin),
         .sending_pixels(sending_pixels),.sample_pixel(sample_pixel),
         .pixel_index(pixel_index),.pixel_data(pixel_data),

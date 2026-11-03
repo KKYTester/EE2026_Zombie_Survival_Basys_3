@@ -1,14 +1,13 @@
 `timescale 1ns / 1ps
-// Full-screen menu pixels: title (1P / 2P), generating, countdown, game over, victory.
+// Full-screen menu pixels: title (1P / 2P), generating, game over, victory.
 // Purely combinational; one font3x5 lookup per pixel. Text lines never overlap,
 // so the line is chosen from py and the character from px.
 module menu_screens #(parameter ENABLE_2P = 0)(
     input wire [6:0] px, input wire [5:0] py,
-    input wire [2:0] screen,          // 0 title, 1 generating, 2 countdown, 3 game over, 4 victory
+    input wire [2:0] screen,          // 0 title, 1 generating, 2 reserved, 3 game over, 4 victory
     input wire sel,                   // 0 = 1 PLAYER, 1 = 2 PLAYERS
     input wire [6:0] cursor_x, input wire [5:0] cursor_y,
     input wire show_cursor,
-    input wire [1:0] count_digit,     // 3, 2, 1
     input wire [5:0] progress,        // 0..63 generating bar fill
     input wire [3:0] wave_tens, input wire [3:0] wave_ones,   // wave reached (end screens)
     input wire over_ready,            // show the retry / play-again hint
@@ -66,14 +65,7 @@ module menu_screens #(parameter ENABLE_2P = 0)(
                     line_on=1; str={"MAP",104'd0}; len=3; x0=42; y0=28;
                 end
             end
-            3'd2: begin
-                if(py>=14 && py<=33) begin
-                    line_on=1; str={8'd48+{6'd0,count_digit},120'd0}; len=1;
-                    x0=42; y0=14; shift=2; color=YELLOW;
-                end else if(py>=44 && py<=48) begin
-                    line_on=1; str={"GET READY",56'd0}; len=9; x0=30; y0=44;
-                end
-            end
+            3'd2: begin end // Reserved: the countdown screen was removed.
             3'd4: begin
                 if(py>=6 && py<=15) begin
                     line_on=1; str={"YOU",104'd0}; len=3; x0=37; y0=6; shift=1; color=YELLOW;

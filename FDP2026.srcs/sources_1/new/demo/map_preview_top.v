@@ -12,8 +12,8 @@
 // the real modules to the same ports instead.
 module map_preview_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     parameter USE_MOUSE=1, parameter ENABLE_2P=0,
-    parameter GEN_SHIFT=26, parameter COUNT_SHIFT=26, parameter OVER_SHIFT=27,
-    parameter TINT_SHIFT=25, parameter BANNER_SHIFT=27, parameter BLINK_SHIFT=24,
+    parameter GEN_SHIFT=26, parameter OVER_SHIFT=27,
+    parameter TINT_SHIFT=25, parameter BLINK_SHIFT=24,
     parameter SPAWN_SHIFT=26, parameter CLEAR_SHIFT=27,
     parameter FLASH_SHIFT=22, parameter RECOIL_SHIFT=23, parameter RELOAD_SHIFT=25,
     parameter WIN_WAVE=10, parameter WORLD_PATTERN=0, parameter WORLD_LATENCY=0)(
@@ -107,8 +107,8 @@ module map_preview_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     wire spawn_req, spawn_ack, enemy_defeated, enemies_clear, shot_fired;
     wire playing = game_state==3'd3;
     game_core #(.STAGE(STAGE),.DEBOUNCE_CYCLES(DEBOUNCE_CYCLES),.ENABLE_2P(ENABLE_2P),
-        .SHOW_CURSOR(USE_MOUSE),.GEN_SHIFT(GEN_SHIFT),.COUNT_SHIFT(COUNT_SHIFT),
-        .OVER_SHIFT(OVER_SHIFT),.TINT_SHIFT(TINT_SHIFT),.BANNER_SHIFT(BANNER_SHIFT),
+        .SHOW_CURSOR(USE_MOUSE),.GEN_SHIFT(GEN_SHIFT),
+        .OVER_SHIFT(OVER_SHIFT),.TINT_SHIFT(TINT_SHIFT),
         .BLINK_SHIFT(BLINK_SHIFT),.SPAWN_SHIFT(SPAWN_SHIFT),.CLEAR_SHIFT(CLEAR_SHIFT),
         .FLASH_SHIFT(FLASH_SHIFT),.RECOIL_SHIFT(RECOIL_SHIFT),.RELOAD_SHIFT(RELOAD_SHIFT),
         .WIN_WAVE(WIN_WAVE)) game(

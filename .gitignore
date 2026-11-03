@@ -46,3 +46,7 @@ Thumbs.db
 # Locally generated Vivado projects
 /build/
 *.xpr
+
+/sim/map/
+/docs/map/
+/scripts/map/gen_weapon_overlay.py
