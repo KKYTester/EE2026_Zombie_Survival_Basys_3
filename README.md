@@ -1,5 +1,11 @@
 # EE2026_Zombie_Survival_Basys_3
 
+## Team integration
+
+- [Provisional enemy subsystem interface](docs/enemy-interface.md): Fawaz's
+  Task 1 specification, including existing connections, proposed conventions
+  and open decisions for team review. It does not change the HDL.
+
 ## Set up the Vivado project
 
 The Vivado project is generated locally using `create_project.tcl`. The repository
