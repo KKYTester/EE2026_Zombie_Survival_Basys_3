@@ -3,7 +3,7 @@
 module tb_enemy_waves;
     reg clk=0, rst=1, start=0, playing=0, defeat=0;
     reg [255:0] map_bits;
-    wire req,ack,dead,clear_wave,won;
+    wire req,ack,dead,clear_wave,won,spawn_busy;
     wire [7:0] tile,active;
     wire [255:0] occupied;
     wire [6:0] wave,remaining;
@@ -13,11 +13,13 @@ module tb_enemy_waves;
     wave_controller #(.SPAWN_SHIFT(2),.CLEAR_SHIFT(2),.MIN_DIST(2),.WIN_WAVE(2)) waves(
         .clk(clk),.rst(rst),.play_start(start),.playing(playing),.map_bits(map_bits),
         .occupied(occupied),.player_tile(8'h11),.spawn_ack(ack),.enemy_defeated(dead),
-        .wave(wave),.spawn_req(req),.spawn_tile(tile),.alive(alive),.remaining(remaining),
+        .wave(wave),.spawn_req(req),.spawn_tile(tile),.spawn_busy(spawn_busy),
+        .alive(alive),.remaining(remaining),
         .wave_clear(clear_wave),.game_won(won));
     enemy_manager enemies(.clk(clk),.rst(rst),.clear(start || !playing),
         .playing(playing),.map_ready(1'b1),.map_bits(map_bits),.spawn_req(req),
         .spawn_tile(tile),.debug_defeat(defeat),.spawn_ack(ack),.enemy_defeated(dead),
+        .move_tick(1'b1),.spawn_busy(spawn_busy),.player_tile(8'h11),
         .occupied(occupied),.active(active),.read_id(3'd0),.read_active(),
         .read_x(),.read_y(),.read_hp(),.read_type(),.read_state(),.read_cooldown());
     always @(posedge clk) if(!rst && playing && !start) begin

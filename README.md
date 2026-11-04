@@ -63,12 +63,14 @@ Use Vivado's **Add Sources** to add new files to your existing project, or
 regenerate the project using the steps above. Keep simulation-only testbenches
 outside this design-source folder.
 
-## Fawaz: enemy lifecycle demo (Task 3)
+## Fawaz: enemy movement demo (Tasks 3–4)
 
 `enemy_test_top` uses the map/game subsystem with `enemy_manager` replacing the
 temporary zombie stub. It keeps eight stable slots, initializes position/HP/type/
 state/cooldown, acknowledges each spawn once, and reports occupancy and deaths.
-Zombies remain stationary; movement and real combat are later tasks.
+Zombies take tile steps toward the fixed player spawn twice per second on the
+minimap. Walls, the player tile and other zombies block movement. A zombie can
+get stuck when a route requires moving away from the player.
 
 In your existing Vivado project:
 

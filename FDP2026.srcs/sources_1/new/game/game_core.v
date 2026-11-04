@@ -50,7 +50,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     // Enemies and combat (Member 2)
     input wire spawn_ack, input wire enemy_defeated,
     input wire [255:0] occupied, input wire player_hit,
-    output wire spawn_req, output wire [7:0] spawn_tile,
+    output wire spawn_req, output wire [7:0] spawn_tile, output wire spawn_busy,
     output wire enemies_clear, output wire shot_fired);
 
     (* ASYNC_REG="TRUE" *) reg [1:0] switch_sync=0;
@@ -117,7 +117,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .clk(clk),.rst(rst),.play_start(play_start),.playing(playing_now),
         .map_bits(published_map),.occupied(zombies),.player_tile(player_tile),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.wave(wave),
-        .spawn_req(spawn_req),.spawn_tile(spawn_tile),.alive(alive),
+        .spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_busy(spawn_busy),.alive(alive),
         .remaining(remaining),.wave_clear(wave_clear),.game_won(game_won));
     hud_effects_ctrl #(.TINT_SHIFT(TINT_SHIFT),
         .BLINK_SHIFT(BLINK_SHIFT)) effects_ctrl(

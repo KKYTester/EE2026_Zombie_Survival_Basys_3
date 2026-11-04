@@ -24,6 +24,7 @@ module wave_controller #(
     input wire spawn_ack, input wire enemy_defeated,
     output reg [6:0] wave,
     output reg spawn_req, output reg [7:0] spawn_tile,
+    output wire spawn_busy,
     output reg [5:0] alive,
     output wire [6:0] remaining,
     output reg wave_clear,
@@ -69,6 +70,8 @@ module wave_controller #(
 
     // Give population accounting one owner. An accepted spawn and an enemy
     // defeat on the same clock leave alive unchanged but count both events.
+    // Keep the selected tile free until the enemy manager accepts it.
+    assign spawn_busy = state==W_FIND_TILE || state==W_WAIT_ACK;
     wire spawn_accepted = state==W_WAIT_ACK && spawn_ack;
     wire defeat_accepted = enemy_defeated && alive!=0;
 

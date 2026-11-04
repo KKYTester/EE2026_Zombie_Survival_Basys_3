@@ -3,6 +3,8 @@ module tb_enemy_manager;
     reg clk=0, rst=1, clear=0, playing=1, ready=1;
     reg [255:0] map_bits=0;
     reg req=0, defeat=0;
+    reg move_tick=0, spawn_busy=0;
+    reg [7:0] player_tile=8'h42;
     reg [7:0] tile=0;
     reg [2:0] id=0;
     wire ack, dead, valid;
@@ -21,6 +23,7 @@ module tb_enemy_manager;
     enemy_manager dut(.clk(clk),.rst(rst),.clear(clear),.playing(playing),
         .map_ready(ready),.map_bits(map_bits),.spawn_req(req),.spawn_tile(tile),
         .debug_defeat(defeat),.spawn_ack(ack),.enemy_defeated(dead),
+        .move_tick(move_tick),.spawn_busy(spawn_busy),.player_tile(player_tile),
         .occupied(occupied),.active(active),.read_id(id),.read_active(valid),
         .read_x(x),.read_y(y),.read_hp(hp),.read_type(kind),.read_state(state),
         .read_cooldown(cooldown));
@@ -29,6 +32,9 @@ module tb_enemy_manager;
     task step; begin @(posedge clk); #2; @(negedge clk); end endtask
     task check(input condition, input [8*100-1:0] message);
         begin if(condition !== 1'b1) $fatal(1,"%0s",message); end
+    endtask
+    task sweep;
+        begin move_tick=1; step; move_tick=0; repeat(48) step; end
     endtask
     task spawn(input [7:0] where);
         begin tile=where; req=1; step; check(ack,"spawn accepted"); req=0; step; end
@@ -77,6 +83,35 @@ module tb_enemy_manager;
         check(active==0 && occupied==0 && !ack && !dead,"reset during request");
         req=0; rst=0; step; spawn(8'h12);
         check(acks==12 && deaths==3,"event accounting");
+
+        // Wall on the preferred axis forces a step on the other axis.
+        clear=1; step; clear=0;
+        player_tile=8'h25; map_bits[8'h12]=1;
+        spawn(8'h11); sweep;
+        id=0; #1;
+        check(occupied==(256'd1<<8'h21) && x==384 && y==640,
+              "wall fallback or position/mask mismatch");
+        map_bits[8'h22]=1; sweep;
+        check(occupied==(256'd1<<8'h21),"blocked zombie moved");
+        map_bits=0;
+
+        // Two zombies want tile 32. Only the first can claim it.
+        clear=1; step; clear=0;
+        player_tile=8'h42; spawn(8'h31); spawn(8'h33);
+        map_bits[8'h43]=1;
+        spawn_busy=1; sweep;
+        check(occupied[8'h31] && occupied[8'h33],"movement during spawn search");
+        spawn_busy=0; sweep;
+        check(occupied==((256'd1<<8'h32)|(256'd1<<8'h33)),"two slots claimed one tile");
+        sweep;
+        check(!occupied[8'h42] && occupied[8'h32],"zombie stepped onto player");
+
+        // A removal between validation and commit invalidates the pending move.
+        clear=1; step; clear=0; map_bits=0;
+        spawn(8'h02);
+        move_tick=1; step; move_tick=0; repeat(3) step;
+        defeat=1; step; defeat=0; repeat(48) step;
+        check(active==0 && occupied==0,"interrupted move resurrected removed zombie");
         $display("TB_ENEMY_MANAGER: PASS"); $finish;
     end
     initial begin #100000; $fatal(1,"timeout"); end

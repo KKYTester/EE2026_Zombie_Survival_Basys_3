@@ -1,13 +1,14 @@
 `timescale 1ns / 1ps
 // Enemy lifecycle demo: same board controls and pinout as map_preview_top.
-// btnR removes the lowest active slot; movement and combat come later.
+// btnR removes the lowest active slot.
 module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     parameter USE_MOUSE=1, parameter ENABLE_2P=0,
     parameter GEN_SHIFT=26, parameter OVER_SHIFT=27,
     parameter TINT_SHIFT=25, parameter BLINK_SHIFT=24,
     parameter SPAWN_SHIFT=26, parameter CLEAR_SHIFT=27,
     parameter FLASH_SHIFT=22, parameter RECOIL_SHIFT=23, parameter RELOAD_SHIFT=25,
-    parameter WIN_WAVE=10, parameter WORLD_PATTERN=0, parameter WORLD_LATENCY=0)(
+    parameter WIN_WAVE=10, parameter WORLD_PATTERN=0, parameter WORLD_LATENCY=0,
+    parameter integer MOVE_PERIOD=50_000_000)(
     input wire clk, input wire sw0, input wire btnC, input wire btnU,
     input wire btnL, input wire btnR, input wire btnD,
     inout wire PS2Clk, inout wire PS2Data,
@@ -97,6 +98,15 @@ module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     wire [6:0] wave; wire [1:0] health;
     wire spawn_req, spawn_ack, enemy_defeated, enemies_clear, shot_fired;
     wire playing = game_state==3'd3;
+    wire spawn_busy;
+    localparam integer MOVE_COUNTER_BITS = (MOVE_PERIOD>1) ? $clog2(MOVE_PERIOD) : 1;
+    reg [MOVE_COUNTER_BITS-1:0] move_counter;
+    wire move_tick = playing && move_counter==MOVE_PERIOD-1;
+    // Clock enable for two movement sweeps per second at 100 MHz.
+    always @(posedge clk) begin
+        if(rst || enemies_clear || !playing || move_tick) move_counter<=0;
+        else move_counter<=move_counter+1'b1;
+    end
     game_core #(.STAGE(STAGE),.DEBOUNCE_CYCLES(DEBOUNCE_CYCLES),.ENABLE_2P(ENABLE_2P),
         .SHOW_CURSOR(USE_MOUSE),.GEN_SHIFT(GEN_SHIFT),
         .OVER_SHIFT(OVER_SHIFT),.TINT_SHIFT(TINT_SHIFT),
@@ -115,13 +125,14 @@ module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .world_pixel(world_pixel),.pixel_x(pixel_x),.pixel_y(pixel_y),.frame_begin(frame_begin),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.occupied(occupied),
         .player_hit(press_d),
-        .spawn_req(spawn_req),.spawn_tile(spawn_tile),
+        .spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_busy(spawn_busy),
         .enemies_clear(enemies_clear),.shot_fired(shot_fired));
 
     // ---------------- Enemy records and spawn handshake ----------------
     enemy_manager enemies(.clk(clk),.rst(rst),.clear(enemies_clear),
         .playing(playing),.map_ready(map_ready && !map_busy),.map_bits(published_map),
         .spawn_req(spawn_req),.spawn_tile(spawn_tile),.debug_defeat(press_r && playing),
+        .move_tick(move_tick),.spawn_busy(spawn_busy),.player_tile(p1_addr),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.occupied(occupied),
         .read_id(3'd0),.active(),.read_active(),.read_x(),.read_y(),
         .read_hp(),.read_type(),.read_state(),.read_cooldown());
