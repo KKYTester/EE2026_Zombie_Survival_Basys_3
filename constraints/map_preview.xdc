@@ -2,15 +2,6 @@
 set_property -dict {PACKAGE_PIN W5 IOSTANDARD LVCMOS33} [get_ports clk]
 create_clock -name sys_clk -period 10.000 [get_ports clk]
 set_property -dict {PACKAGE_PIN V17 IOSTANDARD LVCMOS33} [get_ports sw0]
-# Aim switches are present on the enemy demo only.
-foreach {port pin index} {sw1 V16 0 sw2 W16 1} {
-    set aim_port [get_ports -quiet $port]
-    if {[llength $aim_port]} {
-        set_property -dict [list PACKAGE_PIN $pin IOSTANDARD LVCMOS33] $aim_port
-        set aim_input [get_pins -quiet [format {aim_meta_reg[%d]/D} $index]]
-        if {[llength $aim_input]} { set_false_path -from $aim_port -to $aim_input }
-    }
-}
 set_property -dict {PACKAGE_PIN U18 IOSTANDARD LVCMOS33} [get_ports btnC]
 set_property -dict {PACKAGE_PIN T18 IOSTANDARD LVCMOS33} [get_ports btnU]
 set_property -dict {PACKAGE_PIN U16 IOSTANDARD LVCMOS33} [get_ports {led[0]}]

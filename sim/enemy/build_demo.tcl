@@ -15,6 +15,7 @@ proc add_hdl {dir} {
 }
 add_hdl [file join $root FDP2026.srcs sources_1 new]
 read_xdc [file join $root constraints map_preview.xdc]
+read_xdc [file join $root constraints enemy_aim.xdc]
 set_property top enemy_test_top [current_fileset]
 update_compile_order -fileset sources_1
 synth_design -top enemy_test_top -part xc7a35tcpg236-1

@@ -80,7 +80,8 @@ In your existing Vivado project:
    `FDP2026.srcs/sources_1/new/enemy/enemy_manager.v` and
    `FDP2026.srcs/sources_1/new/demo/enemy_test_top.v` as design sources.
 2. Set `enemy_test_top` as top, with `STAGE=3`. Keep `constraints/map_preview.xdc`
-   enabled and the master XDC disabled. The demo XDC also assigns SW1 and SW2.
+   enabled and the master XDC disabled. Add `constraints/enemy_aim.xdc` to
+   assign SW1 and SW2 for `enemy_test_top`.
 3. Build/program and start with btnC. Enable SW0 to see the minimap. Set
    SW2:SW1 to 00 for right, 01 for down, 10 for left, or 11 for up.
    Press btnC to fire along the selected direction. LD4 shows whether the most
