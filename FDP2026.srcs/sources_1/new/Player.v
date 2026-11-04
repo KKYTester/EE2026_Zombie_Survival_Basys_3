@@ -1,27 +1,29 @@
 `timescale 1ns / 1ps
 
-module Player (
+module Player #(
+    parameter [31:0] START_X = 32'd0,
+    parameter [31:0] START_Y = 32'd0,
+    parameter [31:0] START_ANGLE = 32'd0
+) (
     input wire reset,
     input wire clk, // system clock
     input wire game_tick, // one system-clock cycle per game update (24 Hz)
-    input wire [31:0] dx, // horizontal velo in m/tick
-    input wire [31:0] dy, // vertical velo in m/tick
-    input wire [31:0] omega, // in rad/tick
-    output reg [31:0] x_coord = 32'd0, //in m
-    output reg [31:0] y_coord = 32'd0, // in m
-    output reg [31:0] theta = 32'd0// in rad, with 0 as north
+    input wire [31:0] dx, // x increment per tick, 12 fractional bits
+    input wire [31:0] dy, // y increment per tick, 12 fractional bits
+    input wire [31:0] omega, // angle increment per tick, 1024 units per turn
+    output reg [31:0] x_coord = 32'd0,
+    output reg [31:0] y_coord = 32'd0,
+    output reg [31:0] theta = 32'd0 // low 10 bits: 0 north, clockwise positive
 );
-    // This module holds player's state (position, angle, velocity)
-    // The module will also check for collisions to ensure movement will enter a wall
-    // Inputs are increments per game tick. 
+    // This module holds position and angle. x points east, y points north.
+    // Inputs are increments per game tick (two's complement for negative steps).
     // A future controller must scale velocities by the game-update period before supplying them here.
-    // TODO: Define the fixed-point coordinate and angle representations.
     // TODO: Collision checker
     always @(posedge clk) begin
         if (reset) begin
-            x_coord <= 32'd0;
-            y_coord <= 32'd0;
-            theta <= 32'd0;
+            x_coord <= START_X;
+            y_coord <= START_Y;
+            theta <= START_ANGLE;
         end
         else if (game_tick) begin
             x_coord <= x_coord + dx;
