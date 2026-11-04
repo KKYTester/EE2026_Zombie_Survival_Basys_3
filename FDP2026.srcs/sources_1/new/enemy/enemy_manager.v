@@ -4,6 +4,7 @@ module enemy_manager #(
     parameter integer MAX_ENEMIES = 8,
     parameter integer COORD_FRAC_BITS = 8, // supported range: 1..27
     parameter [7:0] INITIAL_HP = 8'd3,
+    parameter integer ATTACK_COOLDOWN_CYCLES = 100_000_000,
     parameter integer ID_BITS = (MAX_ENEMIES > 1) ? $clog2(MAX_ENEMIES) : 1
 )(
     input wire clk, rst, clear, playing, map_ready,
@@ -16,6 +17,7 @@ module enemy_manager #(
     input wire shot_fired,
     input wire [1:0] aim,
     output wire shot_hit,
+    output reg player_hit,
     output reg spawn_ack, enemy_defeated,
     output reg [255:0] occupied,
     output reg [MAX_ENEMIES-1:0] active,
@@ -135,6 +137,43 @@ module enemy_manager #(
                       move_state==MOVE_APPLY;
     wire [7:0] set_tile = apply_move ? candidate : spawn_tile;
     wire [7:0] clear_tile = apply_move ? old_tile : remove_tile;
+
+    localparam integer ATTACK_TIMER_BITS =
+        (ATTACK_COOLDOWN_CYCLES>1) ? $clog2(ATTACK_COOLDOWN_CYCLES) : 1;
+    reg [ATTACK_TIMER_BITS-1:0] attack_timer;
+    reg [1:0] attack_dir;
+    reg [7:0] attack_origin, attack_tile;
+    reg attack_neighbor_valid;
+
+    // Probe one edge-sharing tile per clock to share the occupancy lookup.
+    always @(posedge clk) begin
+        if(rst || clear || !playing || !map_ready) begin
+            attack_dir<=0;
+            attack_neighbor_valid<=0;
+        end else begin
+            attack_dir<=attack_dir+1'b1;
+            attack_origin<=player_tile;
+            case(attack_dir)
+                2'd0: begin attack_tile<=player_tile-8'd1;  attack_neighbor_valid<=player_tile[3:0]!=0; end
+                2'd1: begin attack_tile<=player_tile+8'd1;  attack_neighbor_valid<=player_tile[3:0]!=15; end
+                2'd2: begin attack_tile<=player_tile-8'd16; attack_neighbor_valid<=player_tile[7:4]!=0; end
+                2'd3: begin attack_tile<=player_tile+8'd16; attack_neighbor_valid<=player_tile[7:4]!=15; end
+            endcase
+        end
+    end
+
+    // One shared grace period caps damage even when several zombies are adjacent.
+    always @(posedge clk) begin
+        player_hit<=0;
+        if(rst || clear || !playing || !map_ready) attack_timer<=0;
+        else if(attack_timer!=0) attack_timer<=attack_timer-1'b1;
+        else if(attack_neighbor_valid && attack_origin==player_tile &&
+                !map_bits[attack_origin] && !map_bits[attack_tile] &&
+                occupied[attack_tile] && !remove_enemy) begin
+            player_hit<=1;
+            attack_timer<=ATTACK_COOLDOWN_CYCLES-1;
+        end
+    end
 
     // Read, plan, check and apply one slot at a time.
     always @(posedge clk) begin

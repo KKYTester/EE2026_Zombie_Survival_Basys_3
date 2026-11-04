@@ -63,7 +63,7 @@ Use Vivado's **Add Sources** to add new files to your existing project, or
 regenerate the project using the steps above. Keep simulation-only testbenches
 outside this design-source folder.
 
-## Fawaz: enemy movement and shooting demo (Tasks 3–7)
+## Fawaz: enemy movement and combat demo (Tasks 3–8)
 
 `enemy_test_top` uses the map/game subsystem with `enemy_manager` replacing the
 temporary zombie stub. It keeps eight stable slots, initializes position/HP/type/
@@ -86,6 +86,7 @@ In your existing Vivado project:
    SW2:SW1 to 00 for right, 01 for down, 10 for left, or 11 for up.
    Press btnC to fire along the selected direction. LD4 shows whether the most
    recent accepted shot hit. Each zombie takes three hits, and walls block shots.
+   Adjacent zombies take one heart, then share a one-second damage cooldown.
    Use btnL to reload, btnR for debug removal, btnD for test damage, and btnU to reset.
 
 Run the focused simulations from PowerShell with `./sim/enemy/run.ps1` (pass

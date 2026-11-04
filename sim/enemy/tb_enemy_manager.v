@@ -6,7 +6,7 @@ module tb_enemy_manager;
     reg move_tick=0, spawn_busy=0;
     reg shot_fired=0;
     reg [1:0] aim=0;
-    wire shot_hit;
+    wire shot_hit, player_hit;
     reg [7:0] player_tile=8'h42;
     reg [7:0] tile=0;
     reg [2:0] id=0;
@@ -16,19 +16,21 @@ module tb_enemy_manager;
     wire [31:0] x,y;
     wire [1:0] kind,state;
     wire [15:0] cooldown;
-    integer acks=0, deaths=0, hits=0, i;
+    integer acks=0, deaths=0, hits=0, player_hits=0, i;
     always @(posedge clk) if(shot_hit) hits=hits+1;
     always #5 clk=~clk;
     always @(posedge clk) begin
         #1;
         if(ack) acks=acks+1;
         if(dead) deaths=deaths+1;
+        if(player_hit) player_hits=player_hits+1;
     end
-    enemy_manager dut(.clk(clk),.rst(rst),.clear(clear),.playing(playing),
+    enemy_manager #(.ATTACK_COOLDOWN_CYCLES(16)) dut(
+        .clk(clk),.rst(rst),.clear(clear),.playing(playing),
         .map_ready(ready),.map_bits(map_bits),.spawn_req(req),.spawn_tile(tile),
         .debug_defeat(defeat),.spawn_ack(ack),.enemy_defeated(dead),
         .move_tick(move_tick),.spawn_busy(spawn_busy),.player_tile(player_tile),
-        .shot_fired(shot_fired),.aim(aim),.shot_hit(shot_hit),
+        .shot_fired(shot_fired),.aim(aim),.shot_hit(shot_hit),.player_hit(player_hit),
         .occupied(occupied),.active(active),.read_id(id),.read_active(valid),
         .read_x(x),.read_y(y),.read_hp(hp),.read_type(kind),.read_state(state),
         .read_cooldown(cooldown));
@@ -197,6 +199,30 @@ module tb_enemy_manager;
         shot_fired=0; move_tick=0; repeat(52) step;
         id=0; #1;
         check(hp==2 && occupied[8'h51],"movement conflicted with a shot");
+
+        // Two adjacent zombies share a single player cooldown.
+        clear=1; step; clear=0; player_tile=8'h00; map_bits=0;
+        spawn(8'h23); spawn(8'h21);
+        i=player_hits;
+        player_tile=8'h22;
+        repeat(6) step;
+        check(player_hits==i+1,"adjacent zombies did not produce exactly one hit");
+        repeat(10) step;
+        check(player_hits==i+1,"hit repeated during cooldown");
+        repeat(9) step;
+        check(player_hits==i+2,"adjacent zombie did not attack after cooldown");
+        defeat=1; repeat(2) step; defeat=0;
+        repeat(24) step;
+        check(player_hits==i+2,"removed zombie still dealt damage");
+
+        clear=1; step; clear=0; player_tile=8'h30;
+        spawn(8'h2f); spawn(8'h21); // Wrapped and diagonal tiles.
+        repeat(24) step;
+        check(player_hits==i+2,"wrapped or diagonal attack");
+        playing=0;
+        player_tile=8'h2e; // Adjacent to a live zombie.
+        repeat(24) step;
+        check(player_hits==i+2,"attack outside gameplay");
         $display("TB_ENEMY_MANAGER: PASS"); $finish;
     end
     initial begin #200000; $fatal(1,"timeout"); end

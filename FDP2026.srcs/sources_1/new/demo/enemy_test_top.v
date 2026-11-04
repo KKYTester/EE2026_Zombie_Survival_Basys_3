@@ -7,7 +7,8 @@ module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     parameter SPAWN_SHIFT=26, parameter CLEAR_SHIFT=27,
     parameter FLASH_SHIFT=22, parameter RECOIL_SHIFT=23, parameter RELOAD_SHIFT=25,
     parameter WIN_WAVE=10, parameter WORLD_PATTERN=0, parameter WORLD_LATENCY=0,
-    parameter integer MOVE_PERIOD=50_000_000)(
+    parameter integer MOVE_PERIOD=50_000_000,
+    parameter integer ATTACK_COOLDOWN_CYCLES=100_000_000)(
     input wire clk, input wire sw0, input wire sw1, sw2, input wire btnC, input wire btnU,
     input wire btnL, input wire btnR, input wire btnD,
     inout wire PS2Clk, inout wire PS2Data,
@@ -111,7 +112,7 @@ module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     wire [6:0] wave; wire [1:0] health;
     wire spawn_req, spawn_ack, enemy_defeated, enemies_clear, shot_fired;
     reg enemy_playing, enemy_clear;
-    wire shot_hit;
+    wire shot_hit, zombie_hit;
     wire [15:0] game_led;
     (* ASYNC_REG="TRUE" *) reg [1:0] aim_meta=0, aim_sync=0;
     reg last_shot_hit;
@@ -159,16 +160,17 @@ module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .player_tile(p1_addr),
         .world_pixel(world_pixel),.pixel_x(pixel_x),.pixel_y(pixel_y),.frame_begin(frame_begin),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.occupied(occupied),
-        .player_hit(press_d),
+        .player_hit(zombie_hit || press_d),
         .spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_busy(spawn_busy),
         .enemies_clear(enemies_clear),.shot_fired(shot_fired));
 
     // ---------------- Enemy records and spawn handshake ----------------
-    enemy_manager enemies(.clk(clk),.rst(rst),.clear(enemy_clear),
+    enemy_manager #(.ATTACK_COOLDOWN_CYCLES(ATTACK_COOLDOWN_CYCLES)) enemies(
+        .clk(clk),.rst(rst),.clear(enemy_clear),
         .playing(enemy_playing),.map_ready(map_ready && !map_busy),.map_bits(published_map),
         .spawn_req(spawn_req),.spawn_tile(spawn_tile),.debug_defeat(press_r),
         .move_tick(move_tick),.spawn_busy(spawn_busy),.player_tile(p1_addr),
-        .shot_fired(shot_fired),.aim(aim_sync),.shot_hit(shot_hit),
+        .shot_fired(shot_fired),.aim(aim_sync),.shot_hit(shot_hit),.player_hit(zombie_hit),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.occupied(occupied),
         .read_id(3'd0),.active(),.read_active(),.read_x(),.read_y(),
         .read_hp(),.read_type(),.read_state(),.read_cooldown());
