@@ -26,6 +26,20 @@ module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     reg sim_mouse_left=0, sim_mouse_right=0, sim_mouse_event=0;
     wire [6:0] mouse_x; wire [5:0] mouse_y;
     wire mouse_left, mouse_right, mouse_event;
+    reg [6:0] game_mouse_x;
+    reg [5:0] game_mouse_y;
+    reg game_mouse_left, game_mouse_right, game_mouse_event;
+    // Pipeline the clamped coordinates and their button/event sample together.
+    always @(posedge clk) begin
+        if(rst) begin
+            game_mouse_x<=0; game_mouse_y<=0;
+            game_mouse_left<=0; game_mouse_right<=0; game_mouse_event<=0;
+        end else begin
+            game_mouse_x<=mouse_x; game_mouse_y<=mouse_y;
+            game_mouse_left<=mouse_left; game_mouse_right<=mouse_right;
+            game_mouse_event<=mouse_event;
+        end
+    end
     generate if(USE_MOUSE) begin : g_mouse
         wire [11:0] xpos,ypos;
         wire [3:0] zpos;
@@ -127,8 +141,8 @@ module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .clk(clk),.rst(rst),
         .btn_c(btnC),.btn_l(btnL),.sw_map(sw0),
         .oled_jb(JB),.seg(seg),.dp(dp),.an(an),.led(led),
-        .mouse_x(mouse_x),.mouse_y(mouse_y),.mouse_left(mouse_left),
-        .mouse_right(mouse_right),.mouse_event(mouse_event),
+        .mouse_x(game_mouse_x),.mouse_y(game_mouse_y),.mouse_left(game_mouse_left),
+        .mouse_right(game_mouse_right),.mouse_event(game_mouse_event),
         .published_map(published_map),.map_ready(map_ready),.map_busy(map_busy),
         .p1_addr(p1_addr),.p2_addr(p2_addr),.active_seed(active_seed),.error_code(error_code),
         .game_state(game_state),.play_start(play_start),.wave(wave),.health(health),
