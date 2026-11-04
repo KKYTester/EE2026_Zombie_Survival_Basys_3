@@ -119,6 +119,31 @@ module tb_enemy_manager;
         sweep;
         check(occupied[8'h22] && occupied[8'h23],"new goal did not redirect movement");
 
+        // Repeat the same contest with the slot that lost now going first.
+        clear=1; step; clear=0;
+        player_tile=8'h42; spawn(8'h31); spawn(8'h33);
+        while(!dut.field_ready) step;
+        sweep;
+        check(occupied[8'h32] && occupied[8'h33],"slot zero did not win first contest");
+        defeat=1; step; defeat=0; step;
+        spawn(8'h31); sweep;
+        check(occupied==((256'd1<<8'h31)|(256'd1<<8'h32)),
+              "rotated sweep did not give slot one priority");
+
+        // Rear slots wait, then move into space freed by the front zombie.
+        clear=1; step; clear=0;
+        player_tile=8'h15; map_bits={256{1'b1}};
+        map_bits[8'h11]=0; map_bits[8'h12]=0; map_bits[8'h13]=0;
+        map_bits[8'h14]=0; map_bits[8'h15]=0;
+        spawn(8'h11); spawn(8'h12); spawn(8'h13);
+        while(!dut.field_ready) step;
+        sweep;
+        check(occupied==((256'd1<<8'h11)|(256'd1<<8'h12)|(256'd1<<8'h14)),
+              "corridor queue did not hold behind the front zombie");
+        sweep;
+        check(occupied==((256'd1<<8'h12)|(256'd1<<8'h13)|(256'd1<<8'h14)),
+              "corridor queue did not advance into free tiles");
+
         // A removal between validation and commit invalidates the pending move.
         clear=1; step; clear=0; map_bits=0;
         spawn(8'h02);

@@ -63,14 +63,15 @@ Use Vivado's **Add Sources** to add new files to your existing project, or
 regenerate the project using the steps above. Keep simulation-only testbenches
 outside this design-source folder.
 
-## Fawaz: enemy movement demo (Tasks 3–5)
+## Fawaz: enemy movement demo (Tasks 3–6)
 
 `enemy_test_top` uses the map/game subsystem with `enemy_manager` replacing the
 temporary zombie stub. It keeps eight stable slots, initializes position/HP/type/
 state/cooldown, acknowledges each spawn once, and reports occupancy and deaths.
 Zombies follow a shared breadth-first search field toward the fixed player
 spawn on the minimap, with up to two tile steps per second. They wait when
-another zombie occupies the next tile and stop short of the player.
+another zombie occupies the next tile and stop short of the player. The first
+slot checked rotates each sweep so lower slots do not always win a contest.
 
 In your existing Vivado project:
 

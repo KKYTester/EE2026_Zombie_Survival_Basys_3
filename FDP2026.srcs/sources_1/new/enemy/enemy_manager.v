@@ -40,7 +40,9 @@ module enemy_manager #(
     localparam [2:0] MOVE_IDLE=0, MOVE_READ=1, MOVE_LOOKUP=2, MOVE_PLAN=3,
                      MOVE_CHECK=4, MOVE_APPLY=5, MOVE_NEXT=6;
     reg [2:0] move_state;
-    reg [ID_BITS-1:0] move_id;
+    reg [ID_BITS-1:0] move_id, first_move_id;
+    wire [ID_BITS-1:0] next_move_id =
+        (move_id==MAX_ENEMIES-1) ? {ID_BITS{1'b0}} : move_id+1'b1;
     reg [7:0] old_tile, target_tile, candidate;
     wire field_ready, field_reachable;
     wire [1:0] field_direction;
@@ -96,7 +98,7 @@ module enemy_manager #(
     // Read, plan, check and apply one slot at a time.
     always @(posedge clk) begin
         if(rst || clear || !playing || !map_ready) begin
-            move_state<=MOVE_IDLE; move_id<=0; target_tile<=0;
+            move_state<=MOVE_IDLE; move_id<=0; first_move_id<=0; target_tile<=0;
             old_tile<=0; candidate<=0;
         end else if(move_state!=MOVE_IDLE && target_changed) begin
             move_state<=MOVE_IDLE;
@@ -106,7 +108,7 @@ module enemy_manager #(
         end else if(movement_enabled && !remove_enemy) begin
             case(move_state)
                 MOVE_IDLE: if(move_tick && field_ready) begin
-                    move_id<=0; target_tile<=player_tile; move_state<=MOVE_READ;
+                    move_id<=first_move_id; target_tile<=player_tile; move_state<=MOVE_READ;
                 end
                 MOVE_READ: if(active[move_id]) begin
                     old_tile<={pos_y[move_id][COORD_FRAC_BITS +: 4],
@@ -125,8 +127,12 @@ module enemy_manager #(
                 end else move_state<=MOVE_NEXT;
                 MOVE_CHECK: move_state<=can_step ? MOVE_APPLY : MOVE_NEXT;
                 MOVE_APPLY: move_state<=MOVE_NEXT;
-                MOVE_NEXT: if(move_id==MAX_ENEMIES-1) move_state<=MOVE_IDLE;
-                else begin move_id<=move_id+1'b1; move_state<=MOVE_READ; end
+                MOVE_NEXT: if(next_move_id==first_move_id) begin
+                    // A full sweep is done. Rotate priority for the next tick.
+                    first_move_id<=(first_move_id==MAX_ENEMIES-1) ?
+                                  {ID_BITS{1'b0}} : first_move_id+1'b1;
+                    move_state<=MOVE_IDLE;
+                end else begin move_id<=next_move_id; move_state<=MOVE_READ; end
                 default: move_state<=MOVE_IDLE;
             endcase
         end
