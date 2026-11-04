@@ -9,6 +9,8 @@ module Map_Renderer #(
     parameter [255:0] MAP = `GAME_MAP
 ) (
     input wire clk, reset,
+    input wire [31:0] x_coord, y_coord, theta,
+    output wire game_tick,
     input wire display_clk, frame_begin,
     input wire [12:0] pixel_index,
     output reg [15:0] pixel_data,
@@ -22,7 +24,7 @@ module Map_Renderer #(
     localparam [PIXEL_BITS-1:0] PIXEL_LAST = PIXEL_CYCLES-1;
     reg [GAME_BITS-1:0] game_counter;
     reg [PIXEL_BITS-1:0] pixel_counter;
-    wire game_tick = !reset && game_counter == GAME_LAST;
+    assign game_tick = !reset && game_counter == GAME_LAST;
     wire pixel_tick = !reset && pixel_counter == PIXEL_LAST;
     always @(posedge clk) begin
         if (reset) begin
@@ -33,17 +35,6 @@ module Map_Renderer #(
             pixel_counter <= pixel_tick ? 0 : pixel_counter + 1'b1;
         end
     end
-
-    // No controller yet. Positions use 12 fractional bits; low 10 angle bits
-    // wrap once per turn. Keep the placeholder Player available for integration.
-    reg [31:0] dx = 0, dy = 0, omega = 0;
-    wire [31:0] x_coord, y_coord, theta;
-    Player #(.START_X(`GAME_SPAWN_X), .START_Y(`GAME_SPAWN_Y),
-             .START_ANGLE(`GAME_SPAWN_ANGLE)) Player_one (
-        .clk(clk), .reset(reset), .game_tick(game_tick),
-        .dx(dx), .dy(dy), .omega(omega),
-        .x_coord(x_coord), .y_coord(y_coord), .theta(theta)
-    );
 
     // Bundled-data handshake: writer freezes a complete bank until display
     // acknowledges its publication. The display swaps only at frame_begin.

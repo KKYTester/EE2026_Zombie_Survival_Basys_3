@@ -8,7 +8,13 @@
 //  STUDENT D NAME:  
 //////////////////////////////////////////////////////////////////////////////////
 
-module My_Top_Module (input clk, output [7:0] JB);
+module My_Top_Module (
+    input wire clk,
+    input wire btnU, btnL, btnR, btnD,
+    inout wire ps2_clk, ps2_data,
+    output wire [15:0] led,
+    output wire [7:0] JB
+);
     wire clk_6p25mhz;
     // Hold reset for 255 system-clock cycles after FPGA configuration, long
     // enough to also be sampled by the existing 6.25 MHz OLED interface clock.
@@ -47,9 +53,32 @@ module My_Top_Module (input clk, output [7:0] JB);
         .pmoden         (JB[7]         )
     );
 
+    wire [11:0] mouse_x;
+    wire mouse_left, mouse_middle, mouse_right, mouse_event;
+    // Supplied VHDL entity lives in Mouse_Control.vhd (not MouseCtl.vhd).
+    // Keep default origin and bounds; all optional configuration inputs idle.
+    MouseCtl u_MouseCtl (
+        .clk(clk), .rst(reset), .xpos(mouse_x), .ypos(), .zpos(),
+        .left(mouse_left), .middle(mouse_middle), .right(mouse_right),
+        .new_event(mouse_event), .value(12'd0),
+        .setx(1'b0), .sety(1'b0), .setmax_x(1'b0), .setmax_y(1'b0),
+        .ps2_clk(ps2_clk), .ps2_data(ps2_data)
+    );
+    assign led = reset ? 16'd0 : {mouse_left, mouse_middle, mouse_right, 13'd0};
+    wire game_tick;
+    wire [31:0] player_x, player_y, player_angle;
+    Player_Controller u_Player_Controller (
+        .clk(clk), .reset(reset), .game_tick(game_tick),
+        .btnU(btnU), .btnL(btnL), .btnR(btnR), .btnD(btnD),
+        .mouse_x(mouse_x), .mouse_event(mouse_event),
+        .x_coord(player_x), .y_coord(player_y), .theta(player_angle)
+    );
+
     Map_Renderer u_Map_Renderer(
         .clk        (clk        ),
         .reset      (reset      ),
+        .x_coord(player_x), .y_coord(player_y), .theta(player_angle),
+        .game_tick(game_tick),
         .display_clk(clk_6p25mhz),
         .frame_begin(frame_begin),
         .pixel_index(pixel_index),

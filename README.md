@@ -56,15 +56,32 @@ An already-open project does not automatically refresh when files appear on disk
 Use Vivado's **Add Sources** to add new files to your existing project, or
 regenerate the project using the steps above. Keep simulation-only testbenches
 outside this design-source folder.
-
-## Fixed-step raycasting prototype
+## First-person movement prototype
 
 The OLED now displays a first-person view of the fixed, enclosed 16 by 16 room:
 grey walls, a dark ceiling, and a dark floor. The player starts at `(8.5, 8.5)`,
-looking north. There are no movement, mouse, firing, or restart controls yet;
-reconfiguration restores the startup viewpoint. This is a renderer prototype,
-not the playable game. The existing 6.25 MHz `Oled_Display` and JB wiring remain.
+looking northeast (angle 128). Buttons move the player and horizontal mouse
+movement controls orientation. The view stays still when there is no input.
+There are no zombies, firing, or restart controls yet; reconfiguration restores
+the startup viewpoint. This is a movement/rendering prototype, not the complete
+game. The existing 6.25 MHz `Oled_Display` and JB wiring remain.
 The top supplies a startup reset lasting 255 board clocks; unused `JB[2]` is low.
+
+The north (top) edge has a solid five-by-five wall block at `x=6..10`,
+`y=10..14`, attached to the outer wall. Viewed from above, with north at the top,
+the first six rows are:
+
+```text
+################
+#     #####    #
+#     #####    #
+#     #####    #
+#     #####    #
+#     #####    #
+```
+
+The remaining interior rows retain only the side walls, with a solid bottom
+boundary. The player spawn at `(8.5, 8.5)` remains in open space.
 
 `Game_Config.vh` defines the map and spawn centrally. Map bit `x + 16*y` is 1 for
 a wall, 0 for open space. The lowest 16 bits are row `y=0`, and each row's lowest
@@ -74,7 +91,60 @@ coordinates, with a range of -32 to just under +32 cells. Valid map coordinates
 are 0 to just under 16. Angles use 1024 units per turn, clockwise from north:
 0 north, 256 east, 512 south, 768 west. `Player` retains 32-bit increment/state
 ports; the renderer consumes the low 18 position bits and low 10 angle bits.
-Player collision and input handling are still pending; increments are zero.
+`Player_Controller` supplies collision-checked position increments and angles;
+`Player` stores the committed state. Angles explicitly wrap modulo 1024.
+The renderer snapshots all three state values once per scan.
+
+### Controls and mouse wiring
+
+| Input | Action |
+| --- | --- |
+| BtnU | Move forward relative to the view |
+| BtnD | Move backward relative to the view |
+| BtnL / BtnR | Strafe left / right relative to the view |
+| Mouse horizontal movement | Turn right for increasing x, left for decreasing x |
+| Mouse left / middle / right button | Light LED 15 / 14 / 13 respectively |
+
+Buttons are active high, synchronized through two registers, and debounced for
+10 ms on both press and release. Holding a button repeats movement at 24 Hz.
+Opposite buttons cancel on their respective axis. Diagonal movement uses a
+3/4 scale, approximately 6% faster than single-axis movement. Single-axis speed
+is approximately three cells per second (1/8 cell per tick); direction vectors
+reuse the ray engine's rounded sine table. `Game_Config.vh` holds movement step,
+body radius, and debounce constants. Keep the maximum step below one cell.
+
+The player has a square collision body with a 1/8-cell half-width. Each update
+checks its four corners against the central map, treating out-of-map positions
+as solid. X movement is checked first, then y movement at the accepted x,
+allowing sliding along walls. Each movement update occupies six 100 MHz cycles:
+latch direction/buttons, compute movement vector, add position, check x, check y,
+commit position and angle together. The renderer
+snapshots the previous complete state while this update runs; it never sees a
+partially updated viewpoint. The shared `game_tick` comes from `Map_Renderer`.
+
+`My_Top_Module` instantiates the supplied VHDL entity `MouseCtl` from
+`Mouse_Control.vhd`, with its `Ps2Interface.vhd` dependency, on the 100 MHz board
+clock. These supplied drivers are unchanged. There is no `Top_Student.v` in
+this project. `value=0` and `setx`, `sety`, `setmax_x`, `setmax_y` are all tied
+low, retaining the default origin and bounds. On `new_event`, the controller
+records `spawn_angle + xpos` modulo 1024; one x count is 0.3515625 degrees.
+Multiple events between game ticks retain the latest orientation. Mouse outputs
+and game logic share one clock; the supplied PS/2 interface filters and samples
+the external lines. The XDC excepts asynchronous pad-input timing only.
+
+**Default-driver limitation:** `xpos` saturates at 0 and 960. From startup,
+moving farther left cannot turn; moving right spans 337.5 degrees, and turning
+stops at either bound. There is no continuous mouse-look because configuration
+inputs are kept idle as requested. Continuous turning would require recentering
+the driver or exposing raw movement deltas. Y movement and the wheel
+do not affect the view. Mouse clicks are indicators only; combat is not added.
+
+Connect a wired mouse to the Basys 3 upper-right USB host port. The constraints
+enable C17 for `ps2_clk`, B17 for `ps2_data`, pull-ups, all LED pins, and the four
+directional button pins, matching the
+[Digilent master constraints](https://github.com/Digilent/digilent-xdc/blob/master/Basys-3-Master.xdc).
+The top-level ports are `clk`, `btnU`, `btnL`, `btnR`, `btnD`, `ps2_clk`,
+`ps2_data`, `led[15:0]`, and `JB[7:0]`.
 
 `Ray_Caster.v` implements one ray as a bounded state machine on the 100 MHz
 board clock. It snapshots its inputs on `start`, obtains the direction from a
@@ -98,9 +168,10 @@ Rendering reuses one ray engine. A worst-case full scan takes less than 75,000
 board cycles (0.75 ms at 100 MHz), including setup and column storage. It starts
 immediately after reset and subsequently on the approximately 24 Hz game enable
 when idle. Display acknowledgement can postpone the next scan; no request queue
-is needed for this static prototype. The retained `pixel_tick` defaults to
+is needed for this prototype. The retained `pixel_tick` defaults to
 25 MHz (every 4 board cycles), but ray work and OLED colour lookup do not use it.
-`Player` updates only on `game_tick`; its inputs are increments per tick.
+`Player_Controller` begins an update on `game_tick`; `Player` commits its
+collision-checked increments five board clocks later.
 
 Two banks each store 96 heights (7 bits each) and 96 raw ray distances (10 bits
 each), totalling 3,264 bits before synthesis optimization. The height lookup is
@@ -122,8 +193,10 @@ sample the startup reset; the OLED driver itself is unchanged.
 
 ### Run the checks
 
-Add the new `Ray_Caster.v`, `Game_Config.vh`, and `Ray_Tables.vh` to an already-open
-Vivado project, or regenerate the project. Set the source include directory to
+Add `Button_Debounce.v`, `Player_Controller.v`, `Mouse_Control.vhd`, and
+`Ps2Interface.vhd` alongside the existing renderer files to an already-open
+Vivado project, or regenerate the project. Use mixed-language simulation.
+Set the source include directory to
 `FDP2026.srcs/sources_1/new/` if adding files manually. `create_project.tcl` now
 sets it automatically. Keep testbenches in the simulation fileset only.
 
@@ -150,10 +223,19 @@ an explicit `PASS` from each simulation. Generated outputs stay under `build/`.
   publication, stable front bank during rendering, invalid pixel indices, and
   reset/restart. It exports the first simulated image to
   `build/renderer_checks/prototype.ppm`.
-- `clock_enable_tb`: existing player/enable/startup-reset regression, updated
-  for the new spawn and existing 25 MHz parameter default. It simulates 83.34 ms.
+- `clock_enable_tb`: player/enable/startup-reset regression and existing 25 MHz
+  parameter default. Checks the player stays at spawn without input across two
+  real 24 Hz updates. It simulates 83.34 ms.
+- `player_controller_tb`: 16,384 numerical movement cases (all 1024 angles and
+  16 button combinations), button bounce, opposing inputs, diagonal scaling,
+  mouse event retention/wrap, atomic updates, outer/interior walls, wall sliding,
+  bounds with an unenclosed map, and reset during each update stage.
+- `mouse_top_tb`: actual mixed-language top elaboration, mouse click LEDs,
+  orientation wiring, and controlled renderer snapshot. Stimuli are injected at
+  the synchronous mouse output boundary; PS/2 packet exchange is not simulated.
 - `oled_renderer_tb`: checks actual top-level OLED SPI pixel loads and colours,
-  including pixel zero. It also explicitly records a supplied-driver limitation:
+  including pixel zero, with no input for the reference image.
+  It also explicitly records a supplied-driver limitation:
   `Oled_Display.v` exits `SendPixel` when `pixel_index` reaches 6143, so it sends
   indices 0 through 6142 and skips the bottom-right pixel. All 6,144 renderer
   pixels are tested separately. The driver is labelled `DO NOT MODIFY` and has
@@ -165,22 +247,44 @@ generating a bitstream. Physical OLED appearance and board operation still need
 hardware testing. Regenerate the constant angle tables, if deliberately changing
 their definition, with `python tests/generate_ray_tables.py`.
 
-### Validation recorded for this prototype
+After a successful hardware run, generate the bitstream from its routed
+checkpoint (the script refuses failing internal setup/hold timing):
 
-Vivado 2025.2 compiled and elaborated the design; all four simulations above
-reported `PASS`. Synthesis and full placement/routing completed for
-`xc7a35tcpg236-1`. The implemented top uses 542 LUTs (2.61%), 287 flip-flops
-(0.69%), one RAMB18, and no DSPs. This includes the existing OLED interface;
-constant player inputs and the unused depth output allow synthesis optimization.
-Routed worst setup slack is +1.807 ns and worst hold slack is +0.098 ns, with
-zero failing endpoints. There are no unconstrained internal endpoints, the DRC
-report has zero violations, and CDC classifies the related-clock crossings as
-safely timed. Synthesis warnings concern the existing OLED zero-width replication,
-the deliberately unused pixel-enable counter, and the constant unused JB pin.
+```powershell
+& 'C:/AMDDesignTools/2025.2/Vivado/bin/vivado.bat' -mode batch -source tests/write_bitstream.tcl
+```
 
-The constraints still lack external output delays for the seven active OLED
-signals. Thus passing internal timing is not external-interface timing signoff.
-No board test or bitstream generation was performed; the supplied OLED sender's
-skipped final pixel remains as documented above. Vivado's Tcl file discovery was
-unusable inside the Codex sandbox, so synthesis/implementation ran outside it,
-with reports and checkpoints confined to `build/renderer_hardware/`.
+In Vivado Hardware Manager, open the connected Basys 3 target and program
+`build/renderer_hardware/My_Top_Module.bit`. Check each mouse-button LED,
+horizontal turning, view-relative movement, and collisions against both the
+outside walls and the north block. Test simultaneous mouse turning/movement and
+long button holds. Reconfigure to restore the spawn; BtnC is not connected.
+
+### Validation
+
+Vivado 2025.2 compiled and elaborated the mixed Verilog/VHDL design. All six
+simulations above reported `PASS`, including 16,384 movement reference cases.
+Synthesis and full placement/routing completed for `xc7a35tcpg236-1`. The final
+design uses 1,329 LUTs (6.39%), 875 flip-flops (2.10%), one RAMB18, and no DSPs.
+Routed setup slack is +0.566 ns and hold slack is +0.105 ns, with no failing
+endpoints, no unconstrained internal endpoints, and no DRC violations.
+The bitstream was generated at `build/renderer_hardware/My_Top_Module.bit` and
+downloaded to the connected `xc7a35t` FPGA. Vivado reported startup status HIGH.
+This programs volatile configuration; no flash memory was written.
+Synthesis warnings include unused high state-port bits, the unused pixel-enable
+counter, constant output pins, and the existing OLED zero-width replication.
+
+The CDC report classifies the OLED crossings as safely timed and recognizes the
+four button synchronizers. It also flags 12 input paths as unknown/critical in
+the supplied PS/2 driver's filtering logic: that driver uses raw pad inputs to
+control debounce counters before its final sampling registers. The supplied
+drivers are labelled `DO NOT MODIFY` and remain unchanged. These warnings are
+unresolved; input false paths do not certify those crossings as safe.
+
+There are 12 external output-delay warnings (OLED, PS/2, and mouse-button LEDs).
+Passing internal timing is not external-interface timing signoff. Physical
+mouse/button behavior and OLED appearance still need board verification; PS/2
+packet exchange was not simulated. The supplied OLED sender's skipped final
+pixel remains as documented above. Vivado's Tcl file discovery was unusable
+inside the Codex sandbox, so synthesis/implementation ran outside it, with
+reports and checkpoints confined to `build/renderer_hardware/`.

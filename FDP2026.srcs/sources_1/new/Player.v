@@ -17,18 +17,18 @@ module Player #(
 );
     // This module holds position and angle. x points east, y points north.
     // Inputs are increments per game tick (two's complement for negative steps).
-    // A future controller must scale velocities by the game-update period before supplying them here.
-    // TODO: Collision checker
+    // Player_Controller supplies collision-checked increments per update.
+    wire [9:0] next_angle = theta[9:0] + omega[9:0];
     always @(posedge clk) begin
         if (reset) begin
             x_coord <= START_X;
             y_coord <= START_Y;
-            theta <= START_ANGLE;
+            theta <= {22'd0, START_ANGLE[9:0]};
         end
         else if (game_tick) begin
             x_coord <= x_coord + dx;
             y_coord <= y_coord + dy;
-            theta <= theta + omega;
+            theta <= {22'd0, next_angle};
         end
     end
 endmodule
