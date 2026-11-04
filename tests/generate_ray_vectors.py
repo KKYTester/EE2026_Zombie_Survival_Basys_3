@@ -17,7 +17,9 @@ def cast(x, y, angle):
     for distance in range(769):
         if not (0 <= x < 65536 and 0 <= y < 65536):
             return 1023, 0
-        if x // 4096 in (0, 15) or y // 4096 in (0, 15):
+        cell_x, cell_y = x // 4096, y // 4096
+        if (cell_x in (0, 15) or cell_y in (0, 15)
+                or (6 <= cell_x <= 10 and 10 <= cell_y <= 14)):
             return distance, 64 if distance <= 32 else 2048 // distance
         x += sx
         y += sy
@@ -36,13 +38,13 @@ with (out / "ray_vectors.txt").open("w", encoding="ascii") as stream:
     for x, y, angle in vectors:
         distance, height = cast(x, y, angle)
         stream.write(f"{x & 0x3ffff:05x} {y & 0x3ffff:05x} {angle:03x} {distance:03x} {height:02x}\n")
-for name, x, y, angle in [("frame0", 34816, 34816, 0), ("frame1", 18432, 26624, 256)]:
+for name, x, y, angle in [("frame0", 34816, 34816, 128), ("frame1", 18432, 26624, 256)]:
     with (out / f"{name}.mem").open("w", encoding="ascii") as stream:
         for col in range(96):
             offset = (170 * col + 47) // 95 - 85
             distance, height = cast(x, y, (angle + offset) % 1024)
             stream.write(f"{(distance << 7) | height:05x}\n")
-assert cast(34816, 34816, 0) == (208, 9)
+assert cast(34816, 34816, 0) == (48, 42)
 assert cast(34816, 34816, 256) == (208, 9)
 assert cast(34816, 34816, 512) == (241, 8)
 assert cast(34816, 34816, 768) == (241, 8)

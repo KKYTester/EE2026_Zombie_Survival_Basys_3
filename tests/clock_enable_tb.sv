@@ -10,7 +10,9 @@ module clock_enable_tb;
     wire [31:0] x, y, theta;
     wire [15:0] pixels, single_cycle_pixels, default_pixels;
     wire [7:0] jb;
-    My_Top_Module board (.clk(clk), .JB(jb));
+    tri1 ps2_clk, ps2_data;
+    My_Top_Module board (.clk(clk), .JB(jb), .btnU(1'b0), .btnL(1'b0),
+        .btnR(1'b0), .btnD(1'b0), .ps2_clk(ps2_clk), .ps2_data(ps2_data), .led());
 
     Player player (
         .clk(clk), .reset(reset), .game_tick(player_tick),
@@ -20,15 +22,18 @@ module clock_enable_tb;
     // Short periods exercise multiple pulses and independent enable rates.
     Map_Renderer #(.CLK_HZ(96), .GAME_HZ(24), .PIXEL_UPDATE_HZ(12)) dut (
         .clk(clk), .reset(reset), .display_clk(clk), .frame_begin(1'b0),
-        .pixel_index(13'd0), .pixel_data(pixels), .column_depth()
+        .pixel_index(13'd0), .pixel_data(pixels), .column_depth(),
+        .x_coord(x), .y_coord(y), .theta(theta), .game_tick()
     );
     Map_Renderer #(.CLK_HZ(24), .GAME_HZ(24), .PIXEL_UPDATE_HZ(24)) single_cycle (
         .clk(clk), .reset(reset), .display_clk(clk), .frame_begin(1'b0),
-        .pixel_index(13'd0), .pixel_data(single_cycle_pixels), .column_depth()
+        .pixel_index(13'd0), .pixel_data(single_cycle_pixels), .column_depth(),
+        .x_coord(`GAME_SPAWN_X), .y_coord(`GAME_SPAWN_Y), .theta(`GAME_SPAWN_ANGLE), .game_tick()
     );
     Map_Renderer defaults (
         .clk(clk), .reset(reset), .display_clk(clk), .frame_begin(1'b0),
-        .pixel_index(13'd0), .pixel_data(default_pixels), .column_depth()
+        .pixel_index(13'd0), .pixel_data(default_pixels), .column_depth(),
+        .x_coord(`GAME_SPAWN_X), .y_coord(`GAME_SPAWN_Y), .theta(`GAME_SPAWN_ANGLE), .game_tick()
     );
 
     integer cycle, game_updates, pixel_updates;
@@ -52,9 +57,6 @@ module clock_enable_tb;
     endtask
 
     initial begin
-        dut.dx = 3;
-        dut.dy = 5;
-        dut.omega = 7;
         step;
         if ({x,y,theta} !== 96'd0 || pixels !== 16'd0)
             $fatal(1, "Reset failed");
@@ -78,9 +80,6 @@ module clock_enable_tb;
             step;
             if (sampled_game_tick) game_updates = game_updates + 1;
             if (sampled_pixel_tick) pixel_updates = pixel_updates + 1;
-            if (dut.x_coord !== `GAME_SPAWN_X + 3 * game_updates ||
-                dut.y_coord !== `GAME_SPAWN_Y + 5 * game_updates || dut.theta !== 7 * game_updates)
-                $fatal(1, "Renderer/player enable integration failed");
             if (cycle < 3) begin
                 if ({x,y,theta} !== 96'd0) $fatal(1, "Player changed without enable");
             end else if (cycle < 17) begin
@@ -96,7 +95,7 @@ module clock_enable_tb;
         reset = 1;
         player_tick = 1;
         step;
-        if ({x,y,theta} !== 96'd0 || dut.x_coord !== `GAME_SPAWN_X ||
+        if ({x,y,theta} !== 96'd0 ||
             dut.game_counter !== 0 || dut.pixel_counter !== 0 ||
             dut.game_tick !== 0 || dut.pixel_tick !== 0)
             $fatal(1, "Reset priority/counter restart failed");
@@ -111,9 +110,12 @@ module clock_enable_tb;
             if (defaults.pixel_tick !== ((cycle % 4) == 0))
                 $fatal(1, "Default pixel timing failed at cycle %0d", cycle);
             step;
+            if (board.player_angle !== `GAME_SPAWN_ANGLE ||
+                board.player_x !== `GAME_SPAWN_X || board.player_y !== `GAME_SPAWN_Y)
+                $fatal(1, "Player moved without input at cycle %0d", cycle);
             @(negedge clk);
         end
-        $display("PASS: player hold/update/reset; enable periods/widths; reset restart; default 24 Hz and 25 MHz timing");
+        $display("PASS: player hold/update/reset; enable periods/widths; reset restart; default 24 Hz and 25 MHz timing; no automatic spin/movement");
         $finish;
     end
 endmodule

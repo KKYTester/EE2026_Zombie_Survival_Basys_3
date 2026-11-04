@@ -7,8 +7,10 @@ module map_renderer_tb;
     reg [12:0] pixel_index=0;
     wire [15:0] pixel_data;
     wire [9:0] depth;
+    reg [31:0] x_coord=32'd34816, y_coord=32'd34816, theta=32'd128;
     Map_Renderer #(.CLK_HZ(2400000)) dut (.clk(clk), .reset(reset), .display_clk(display_clk),
-        .frame_begin(frame_begin), .pixel_index(pixel_index), .pixel_data(pixel_data), .column_depth(depth));
+        .frame_begin(frame_begin), .pixel_index(pixel_index), .pixel_data(pixel_data), .column_depth(depth),
+        .x_coord(x_coord), .y_coord(y_coord), .theta(theta), .game_tick());
     reg [16:0] expected0[0:95], expected1[0:95];
     integer p, c, row, h, top, fd, bank;
     reg [16:0] expected;
@@ -52,9 +54,9 @@ module map_renderer_tb;
         wait(dut.state==dut.WAIT_RAY);
         // Simultaneously change position and angle during the first scan.
         // Its results must still match the original snapshot.
-        force dut.x_coord=32'd18432;
-        force dut.y_coord=32'd26624;
-        force dut.theta=32'd256;
+        x_coord=32'd18432;
+        y_coord=32'd26624;
+        theta=32'd256;
         wait(dut.state==dut.WAIT_SWAP);
         repeat (5) @(negedge display_clk);
         if (dut.display_valid || pixel_data !== 0) $fatal(1,"Published before frame boundary");
@@ -75,7 +77,7 @@ module map_renderer_tb;
         // Do not export the frame a second time.
         display_frame_start;
         check_frame(1);
-        release dut.x_coord; release dut.y_coord; release dut.theta;
+        x_coord=32'd34816; y_coord=32'd34816; theta=32'd128;
         @(negedge display_clk); reset=1;
         repeat (3) @(negedge display_clk);
         if (dut.display_valid || pixel_data !== 0) $fatal(1,"Renderer reset failed");

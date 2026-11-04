@@ -1,6 +1,7 @@
 param(
     [string]$VivadoBin = 'C:/AMDDesignTools/2025.2/Vivado/bin',
-    [switch]$Hardware
+    [switch]$Hardware,
+    [string[]]$Tests = @('ray_caster_tb', 'map_renderer_tb', 'clock_enable_tb', 'player_controller_tb', 'mouse_top_tb', 'oled_renderer_tb')
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -9,14 +10,17 @@ $sourceDir = Join-Path $repoRoot 'FDP2026.srcs/sources_1/new'
 & python (Join-Path $PSScriptRoot 'generate_ray_vectors.py')
 if ($LASTEXITCODE -ne 0) { throw 'Reference generation failed' }
 $sources = @(Get-ChildItem -LiteralPath $sourceDir -Filter '*.v' | ForEach-Object { $_.FullName })
-$testNames = @('ray_caster_tb', 'map_renderer_tb', 'clock_enable_tb', 'oled_renderer_tb')
+$vhdlSources = @(Get-ChildItem -LiteralPath $sourceDir -Filter '*.vhd' | ForEach-Object { $_.FullName })
+$testNames = $Tests
 $testFiles = @($testNames | ForEach-Object { Join-Path $PSScriptRoot "${_}.sv" })
 Push-Location -LiteralPath $outputDir
 try {
+    & (Join-Path $VivadoBin 'xvhdl.bat') @vhdlSources
+    if ($LASTEXITCODE -ne 0) { throw 'VHDL compilation failed' }
     & (Join-Path $VivadoBin 'xvlog.bat') --sv -i $sourceDir @sources @testFiles
     if ($LASTEXITCODE -ne 0) { throw 'Verilog compilation failed' }
     foreach ($test in $testNames) {
-        & (Join-Path $VivadoBin 'xelab.bat') $test -s $test --timescale 1ns/1ps
+        & (Join-Path $VivadoBin 'xelab.bat') $test -L unisims_ver -s $test --timescale 1ns/1ps
         if ($LASTEXITCODE -ne 0) { throw "Elaboration failed: $test" }
         & (Join-Path $VivadoBin 'xsim.bat') $test -R -log "${test}.log"
         if ($LASTEXITCODE -ne 0) { throw "Simulation failed: $test" }

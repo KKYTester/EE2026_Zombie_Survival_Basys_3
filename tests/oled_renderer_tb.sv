@@ -3,11 +3,16 @@ module oled_renderer_tb;
     reg clk=0;
     always #5 clk=~clk;
     wire [7:0] jb;
-    My_Top_Module board (.clk(clk), .JB(jb));
+    tri1 ps2_clk, ps2_data;
+    My_Top_Module board (.clk(clk), .JB(jb), .btnU(1'b0), .btnL(1'b0),
+        .btnR(1'b0), .btnD(1'b0), .ps2_clk(ps2_clk), .ps2_data(ps2_data), .led());
     reg [16:0] expected[0:95];
     integer count=0, index, h, top, row;
     reg [15:0] color;
-    initial $readmemh("frame0.mem",expected);
+    initial begin
+        // No mouse events or button presses: the spawn viewpoint stays still.
+        $readmemh("frame0.mem",expected);
+    end
     // Inspect actual SPI pixel loads, including pixel zero at WaitNextFrame.
     always @(negedge board.clk_6p25mhz) begin
         if (!board.reset && board.u_Oled_Display.next_state == board.u_Oled_Display.SendPixel &&

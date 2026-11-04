@@ -14,8 +14,8 @@ module ray_caster_tb;
     wire obstacle_done, obstacle_hit, short_done;
     wire [9:0] obstacle_distance, short_distance;
     wire [6:0] obstacle_height, short_height;
-    // The obstacle blocks a northward ray well before the outer wall.
-    Ray_Caster #(.MAP(`GAME_MAP | (256'b1 << 168))) obstacle (
+    // Extra wall at (8,9) blocks a northward ray before the map's north block.
+    Ray_Caster #(.MAP(`GAME_MAP | (256'b1 << 152))) obstacle (
         .clk(clk), .reset(reset), .start(start), .player_x(x), .player_y(y), .angle(angle),
         .busy(), .done(obstacle_done), .hit(obstacle_hit),
         .height(obstacle_height), .distance_steps(obstacle_distance));
@@ -38,7 +38,7 @@ module ray_caster_tb;
         wait(short_done); #1;
         if (short_distance !== 1023 || short_height !== 0) $fatal(1,"Step cap failed");
         wait(obstacle_done); #1;
-        if (!obstacle_hit || obstacle_distance !== 48 || obstacle_height !== 42)
+        if (!obstacle_hit || obstacle_distance !== 16 || obstacle_height !== 64)
             $fatal(1,"Interior wall did not occlude outer wall");
         wait(done); tick;
         // Reset must abort an in-flight ray, irrespective of start.
