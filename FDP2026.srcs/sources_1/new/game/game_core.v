@@ -47,6 +47,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     input wire [15:0] world_pixel,
     output wire [6:0] pixel_x, output wire [5:0] pixel_y,
     output wire frame_begin,                      // one clk pulse per OLED frame
+    output wire frame_idle,                       // safe window to present the next world frame
     // Enemies and combat (Member 2)
     input wire spawn_ack, input wire enemy_defeated,
     input wire [255:0] occupied, input wire player_hit,
@@ -169,6 +170,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     reg frame_begin_prev;
     always @(posedge clk) frame_begin_prev <= rst ? 1'b0 : oled_frame_begin;
     assign frame_begin = oled_frame_begin && !frame_begin_prev;
+    assign frame_idle = !sending_pixels && !oled_frame_begin;
 
     reg [255:0] frame_map;
     reg [7:0] frame_p1,frame_p2;

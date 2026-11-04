@@ -100,13 +100,14 @@ module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     end else begin : g_now
         assign world_x = pixel_x; assign world_y = pixel_y;
     end endgenerate
-    wire [15:0] world_pixel = (WORLD_PATTERN!=0) ? {world_x[4:0], world_y, world_x[6:5], 3'b101} :
-                              (world_y<32) ? 16'h1084 : 16'h3166;
+    wire [15:0] rendered_pixel;
+    wire [15:0] world_pixel = (WORLD_PATTERN!=0) ?
+        {world_x[4:0], world_y, world_x[6:5], 3'b101} : rendered_pixel;
 
     // ---------------- game_core ----------------
     wire [255:0] published_map, occupied;
     wire [7:0] p1_addr, p2_addr, spawn_tile;
-    wire map_ready, map_busy, play_start, frame_begin;
+    wire map_ready, map_busy, play_start, frame_begin, frame_idle;
     wire [15:0] active_seed;
     wire [2:0] error_code, game_state;
     wire [6:0] wave; wire [1:0] health;
@@ -159,10 +160,50 @@ module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .game_state(game_state),.play_start(play_start),.wave(wave),.health(health),
         .player_tile(p1_addr),
         .world_pixel(world_pixel),.pixel_x(pixel_x),.pixel_y(pixel_y),.frame_begin(frame_begin),
+        .frame_idle(frame_idle),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.occupied(occupied),
         .player_hit(zombie_hit || press_d),
         .spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_busy(spawn_busy),
         .enemies_clear(enemies_clear),.shot_fired(shot_fired));
+
+    // Walls and sprites capture the same camera and publish together between frames.
+    wire [7:0] render_active;
+    wire [95:0] render_x, render_y;
+    reg scene_bank, scene_valid, scene_pending;
+    wire wall_done, sprite_done;
+    wire scene_reset = rst || enemy_clear || !map_ready || map_busy;
+    wire prepare_scene = frame_begin && !scene_reset && !scene_pending;
+    always @(posedge clk) begin
+        if(scene_reset) begin scene_bank<=0; scene_valid<=0; scene_pending<=0; end
+        else if(prepare_scene) scene_pending<=1;
+        else if(frame_idle && scene_pending && wall_done && sprite_done) begin
+            scene_bank<=!scene_bank; scene_valid<=1; scene_pending<=0;
+        end
+    end
+
+    wire [12:0] wall_depth;
+    wire [5:0] wall_top;
+    demo_wall_view walls(.clk(clk),.reset(scene_reset),.prepare(prepare_scene),
+        .display_bank(scene_bank),.map_bits(published_map),.camera_tile(p1_addr),
+        .facing(aim_sync),.pixel_x(world_x),.done(wall_done),
+        .wall_depth(wall_depth),.wall_top(wall_top));
+    reg [6:0] view_x;
+    reg [5:0] view_y;
+    reg view_bank, view_valid;
+    // Match the registered wall-table read with its pixel request.
+    always @(posedge clk) begin
+        view_x<=world_x; view_y<=world_y; view_bank<=scene_bank; view_valid<=scene_valid;
+    end
+    wire draw_wall = view_valid && wall_depth!=13'd4096 && view_y>=wall_top &&
+                     {1'b0,view_y}<7'd64-{1'b0,wall_top};
+    wire [15:0] background = draw_wall ? (wall_depth<768 ? 16'h94b2 : 16'h5aeb) :
+                                        (view_y<32 ? 16'h1084 : 16'h3166);
+    zombie_renderer sprites(.clk(clk),.reset(scene_reset),.prepare(prepare_scene),
+        .display_bank(view_bank),.scene_valid(view_valid),
+        .camera_x({p1_addr[3:0],8'h80}),.camera_y({p1_addr[7:4],8'h80}),
+        .facing(aim_sync),.active(render_active),.zombie_x(render_x),.zombie_y(render_y),
+        .pixel_x(view_x),.pixel_y(view_y),.wall_depth(wall_depth),.background(background),
+        .done(sprite_done),.pixel(rendered_pixel));
 
     // ---------------- Enemy records and spawn handshake ----------------
     enemy_manager #(.ATTACK_COOLDOWN_CYCLES(ATTACK_COOLDOWN_CYCLES)) enemies(
@@ -172,6 +213,7 @@ module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .move_tick(move_tick),.spawn_busy(spawn_busy),.player_tile(p1_addr),
         .shot_fired(shot_fired),.aim(aim_sync),.shot_hit(shot_hit),.player_hit(zombie_hit),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.occupied(occupied),
-        .read_id(3'd0),.active(),.read_active(),.read_x(),.read_y(),
+        .read_id(3'd0),.active(render_active),.render_x(render_x),.render_y(render_y),
+        .read_active(),.read_x(),.read_y(),
         .read_hp(),.read_type(),.read_state(),.read_cooldown());
 endmodule

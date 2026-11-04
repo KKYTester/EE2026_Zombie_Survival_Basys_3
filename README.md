@@ -63,7 +63,7 @@ Use Vivado's **Add Sources** to add new files to your existing project, or
 regenerate the project using the steps above. Keep simulation-only testbenches
 outside this design-source folder.
 
-## Fawaz: enemy movement and combat demo (Tasks 3–8)
+## Fawaz: enemy movement, combat and first-person demo (Tasks 3–10)
 
 `enemy_test_top` uses the map/game subsystem with `enemy_manager` replacing the
 temporary zombie stub. It keeps eight stable slots, initializes position/HP/type/
@@ -77,7 +77,9 @@ In your existing Vivado project:
 
 1. Add `FDP2026.srcs/sources_1/new/enemy/flow_field.v`,
    `FDP2026.srcs/sources_1/new/enemy/enemy_combat.v`,
-   `FDP2026.srcs/sources_1/new/enemy/enemy_manager.v` and
+   `FDP2026.srcs/sources_1/new/enemy/zombie_renderer.v`,
+   `FDP2026.srcs/sources_1/new/enemy/enemy_manager.v`,
+   `FDP2026.srcs/sources_1/new/demo/demo_wall_view.v` and
    `FDP2026.srcs/sources_1/new/demo/enemy_test_top.v` as design sources.
 2. Set `enemy_test_top` as top, with `STAGE=3`. Keep `constraints/map_preview.xdc`
    enabled and the master XDC disabled. Add `constraints/enemy_aim.xdc` to
@@ -88,6 +90,14 @@ In your existing Vivado project:
    recent accepted shot hit. Each zombie takes three hits, and walls block shots.
    Adjacent zombies take one heart, then share a one-second damage cooldown.
    Use btnL to reload, btnR for debug removal, btnD for test damage, and btnU to reset.
+
+Turn SW0 off for the first-person view. SW2:SW1 turns the demo camera as well
+as the aim. The fixed player spawn is the camera origin. The demo samples
+wall rays at 1/16-tile depth intervals and publishes those columns with the
+zombie billboards between OLED frames. Sprite projection uses the same
+64-pixel focal length and Q8 forward depth as the wall view. This is the
+cardinal demo camera; the shared renderer needs to supply matching camera
+coordinates and column depths before integration.
 
 Run the focused simulations from PowerShell with `./sim/enemy/run.ps1` (pass
 `-VivadoBin` if Vivado is installed elsewhere). Tests cover allocation, held

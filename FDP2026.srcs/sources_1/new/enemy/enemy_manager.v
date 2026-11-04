@@ -21,6 +21,7 @@ module enemy_manager #(
     output reg spawn_ack, enemy_defeated,
     output reg [255:0] occupied,
     output reg [MAX_ENEMIES-1:0] active,
+    output wire [MAX_ENEMIES*(COORD_FRAC_BITS+4)-1:0] render_x, render_y,
     // Combinational record lookup for debugging and future consumers.
     input wire [ID_BITS-1:0] read_id,
     output reg read_active,
@@ -33,6 +34,12 @@ module enemy_manager #(
     localparam [1:0] IDLE = 2'd0;
     reg [31:0] pos_x [0:MAX_ENEMIES-1];
     reg [31:0] pos_y [0:MAX_ENEMIES-1];
+    genvar render_slot;
+    generate for(render_slot=0; render_slot<MAX_ENEMIES; render_slot=render_slot+1) begin : g_render
+        localparam integer WIDTH=COORD_FRAC_BITS+4;
+        assign render_x[render_slot*WIDTH +: WIDTH]=pos_x[render_slot][WIDTH-1:0];
+        assign render_y[render_slot*WIDTH +: WIDTH]=pos_y[render_slot][WIDTH-1:0];
+    end endgenerate
     reg [7:0] hp [0:MAX_ENEMIES-1];
     reg [1:0] kind [0:MAX_ENEMIES-1];
     reg [1:0] behaviour [0:MAX_ENEMIES-1];
