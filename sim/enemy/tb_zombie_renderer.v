@@ -33,7 +33,7 @@ module tb_zombie_renderer;
     task expect_pixel(input [6:0] px, input [5:0] py, input [15:0] expected);
         begin
             x=px; y=py;
-            repeat(18) @(negedge clk);
+            repeat(34) @(negedge clk);
             if(pixel!==expected)
                 $fatal(1,"pixel (%0d,%0d): got %h expected %h",x,y,pixel,expected);
         end

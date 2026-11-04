@@ -146,10 +146,28 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     wire [5:0] py=pixel_index / 96;
     // World pixel look-ahead: ask for the next pixel, sample it on the last
     // OLED clock of the current one (phase 15), use it when that pixel is sent.
-    wire [12:0] ahead_index = !sending_pixels ? 13'd0 :
-                              (pixel_index==13'd6143) ? 13'd0 : pixel_index+1'b1;
-    assign pixel_x = ahead_index % 96;
-    assign pixel_y = ahead_index / 96;
+    reg [12:0] request_index, ahead_index, row_index;
+    reg [5:0] request_row;
+    reg [6:0] request_x;
+    reg [5:0] request_y;
+    // Capture the OLED index before incrementing and converting coordinates.
+    // A row is three groups of 32 pixels.
+    wire [7:0] column_group = row_index[12:5] - (8'd3 * request_row);
+    always @(posedge clk) begin
+        if(rst) begin
+            request_index<=13'd6143; ahead_index<=0; row_index<=0;
+            request_row<=0; request_x<=0; request_y<=0;
+        end else begin
+            request_index<=sending_pixels ? pixel_index : 13'd6143;
+            ahead_index<=request_index==6143 ? 13'd0 : request_index+1'b1;
+            row_index<=ahead_index;
+            request_row<=ahead_index[12:5] / 8'd3;
+            request_x<={column_group[1:0],row_index[4:0]};
+            request_y<=request_row;
+        end
+    end
+    assign pixel_x = request_x;
+    assign pixel_y = request_y;
     reg [3:0] pixel_phase;
     reg [15:0] world_now, world_last;
     always @(posedge oled_clk) begin
@@ -162,7 +180,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
             if(!sending_pixels) world_now<=world_pixel;         // pixel 0 of the next frame
             else if(pixel_phase==4'd15) begin
                 world_now<=world_pixel;
-                if(ahead_index==13'd6143) world_last<=world_pixel;  // sent by the tail bridge
+                if(pixel_index==13'd6142) world_last<=world_pixel; // Tail bridge sends the final pixel.
             end
         end
     end

@@ -77,8 +77,8 @@ module zombie_renderer(
         endcase
     end
 
-    localparam [1:0] PIX_IDLE=0, PIX_READ=1, PIX_DRAW=2;
-    reg [1:0] pixel_state;
+    localparam [2:0] PIX_IDLE=0, PIX_READ=1, PIX_OFFSET=2, PIX_SHAPE=3, PIX_DRAW=4;
+    reg [2:0] pixel_state;
     reg [6:0] req_x;
     reg [5:0] req_y;
     reg req_bank, req_scene, req_valid;
@@ -89,7 +89,7 @@ module zombie_renderer(
     reg [7:0] candidate_height;
     reg [15:0] best_color;
     wire [3:0] read_slot = {req_bank,scan};
-    wire signed [16:0] local_x = $signed({10'd0,req_x})-candidate_center;
+    reg signed [16:0] local_x;
     wire [16:0] abs_x = local_x<0 ? -local_x : local_x;
     wire signed [9:0] local_y = $signed({4'd0,req_y})-10'sd32+
                                $signed({3'd0,candidate_height[7:1]});
@@ -114,6 +114,8 @@ module zombie_renderer(
         end
     end
     wire covers_pixel = candidate_valid && opaque && candidate_depth<best_depth;
+    reg draw_candidate;
+    reg [15:0] draw_color;
 
     // The OLED holds each request long enough to scan all eight slots.
     always @(posedge clk) begin
@@ -129,12 +131,20 @@ module zombie_renderer(
             PIX_READ: begin
                 candidate_valid<=valid[read_slot]; candidate_depth<=depths[read_slot];
                 candidate_center<=centers[read_slot]; candidate_height<=heights[read_slot];
+                pixel_state<=PIX_OFFSET;
+            end
+            PIX_OFFSET: begin
+                local_x<=$signed({10'd0,req_x})-candidate_center;
+                pixel_state<=PIX_SHAPE;
+            end
+            PIX_SHAPE: begin
+                draw_candidate<=covers_pixel; draw_color<=sprite_color;
                 pixel_state<=PIX_DRAW;
             end
             PIX_DRAW: begin
-                if(covers_pixel) begin best_depth<=candidate_depth; best_color<=sprite_color; end
+                if(draw_candidate) begin best_depth<=candidate_depth; best_color<=draw_color; end
                 if(scan==7) begin
-                    pixel<=covers_pixel ? sprite_color : best_color;
+                    pixel<=draw_candidate ? draw_color : best_color;
                     pixel_state<=PIX_IDLE;
                 end else begin scan<=scan+1'b1; pixel_state<=PIX_READ; end
             end
