@@ -13,6 +13,9 @@ module enemy_manager #(
     input wire debug_defeat, // one pulse removes the lowest active slot
     input wire move_tick, spawn_busy,
     input wire [7:0] player_tile,
+    input wire shot_fired,
+    input wire [1:0] aim,
+    output wire shot_hit,
     output reg spawn_ack, enemy_defeated,
     output reg [255:0] occupied,
     output reg [MAX_ENEMIES-1:0] active,
@@ -35,7 +38,43 @@ module enemy_manager #(
     reg request_seen;
     reg free_found, live_found;
     reg [ID_BITS-1:0] free_id, live_id;
-    integer select_i, reset_i;
+    integer select_i, reset_i, hit_i;
+
+    wire ray_busy, hit_valid;
+    wire [7:0] hit_tile;
+    enemy_combat combat(.clk(clk),.reset(rst || clear),.enabled(playing && map_ready),
+        .shot_fired(shot_fired),.player_tile(player_tile),.aim(aim),.walls(map_bits),
+        .occupied(occupied),.busy(ray_busy),.hit_valid(hit_valid),.hit_tile(hit_tile));
+    reg hit_found, damage_pending, debug_pending;
+    reg [ID_BITS-1:0] hit_id, damage_id;
+    reg [7:0] damage_tile;
+    // Resolve the tile to a slot before applying damage on the next clock.
+    always @* begin
+        hit_found=0; hit_id=0;
+        for(hit_i=0; hit_i<MAX_ENEMIES; hit_i=hit_i+1)
+            if(active[hit_i] &&
+               {pos_y[hit_i][COORD_FRAC_BITS +: 4],
+                pos_x[hit_i][COORD_FRAC_BITS +: 4]}==hit_tile) begin
+                hit_found=1;
+                hit_id=hit_i;
+            end
+    end
+    // Hold tile ownership stable from the trigger through damage commit.
+    wire combat_locked = shot_fired || ray_busy || damage_pending;
+    assign shot_hit = damage_pending && playing && map_ready && !rst && !clear;
+    wire lethal_hit = shot_hit && hp[damage_id]<=8'd1;
+    always @(posedge clk) begin
+        if(rst || clear || !playing || !map_ready) begin
+            damage_pending<=0; debug_pending<=0;
+        end else begin
+            damage_pending<=hit_valid && hit_found;
+            if(hit_valid && hit_found) begin
+                damage_id<=hit_id;
+                damage_tile<=hit_tile;
+            end
+            debug_pending<=combat_locked && (debug_defeat || debug_pending);
+        end
+    end
 
     localparam [2:0] MOVE_IDLE=0, MOVE_READ=1, MOVE_LOOKUP=2, MOVE_PLAN=3,
                      MOVE_CHECK=4, MOVE_APPLY=5, MOVE_NEXT=6;
@@ -83,12 +122,14 @@ module enemy_manager #(
         end
     end
 
-    wire accept_spawn = playing && map_ready && spawn_req && !request_seen &&
+    wire accept_spawn = playing && map_ready && !combat_locked && spawn_req && !request_seen &&
                         free_found && !map_bits[spawn_tile] && !occupied[spawn_tile];
-    wire [7:0] remove_tile = {pos_y[live_id][COORD_FRAC_BITS +: 4],
-                              pos_x[live_id][COORD_FRAC_BITS +: 4]};
-    wire remove_enemy = playing && debug_defeat && live_found;
-    wire movement_enabled = playing && map_ready && !spawn_busy && !spawn_req;
+    wire debug_remove = playing && !combat_locked && (debug_defeat || debug_pending) && live_found;
+    wire remove_enemy = debug_remove || lethal_hit;
+    wire [ID_BITS-1:0] remove_id = lethal_hit ? damage_id : live_id;
+    wire [7:0] remove_tile = lethal_hit ? damage_tile :
+        {pos_y[live_id][COORD_FRAC_BITS +: 4], pos_x[live_id][COORD_FRAC_BITS +: 4]};
+    wire movement_enabled = playing && map_ready && !combat_locked && !spawn_busy && !spawn_req;
     wire target_changed = player_tile!=target_tile;
     wire apply_move = movement_enabled && !remove_enemy && !target_changed &&
                       move_state==MOVE_APPLY;
@@ -162,10 +203,10 @@ module enemy_manager #(
             // Free/live selectors use pre-edge state, so simultaneous updates
             // target different slots. A full pool retries on the next cycle.
             if(remove_enemy) begin
-                active[live_id]<=0; hp[live_id]<=0;
-                behaviour[live_id]<=IDLE; cooldown[live_id]<=0;
+                active[remove_id]<=0; hp[remove_id]<=0;
+                behaviour[remove_id]<=IDLE; cooldown[remove_id]<=0;
                 enemy_defeated<=1;
-            end
+            end else if(shot_hit) hp[damage_id]<=hp[damage_id]-8'd1;
             if(apply_move) begin
                 pos_x[move_id]<=tile_center(candidate[3:0]);
                 pos_y[move_id]<=tile_center(candidate[7:4]);

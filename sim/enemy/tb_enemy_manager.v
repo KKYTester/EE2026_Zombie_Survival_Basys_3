@@ -4,6 +4,9 @@ module tb_enemy_manager;
     reg [255:0] map_bits=0;
     reg req=0, defeat=0;
     reg move_tick=0, spawn_busy=0;
+    reg shot_fired=0;
+    reg [1:0] aim=0;
+    wire shot_hit;
     reg [7:0] player_tile=8'h42;
     reg [7:0] tile=0;
     reg [2:0] id=0;
@@ -13,7 +16,8 @@ module tb_enemy_manager;
     wire [31:0] x,y;
     wire [1:0] kind,state;
     wire [15:0] cooldown;
-    integer acks=0, deaths=0, i;
+    integer acks=0, deaths=0, hits=0, i;
+    always @(posedge clk) if(shot_hit) hits=hits+1;
     always #5 clk=~clk;
     always @(posedge clk) begin
         #1;
@@ -24,6 +28,7 @@ module tb_enemy_manager;
         .map_ready(ready),.map_bits(map_bits),.spawn_req(req),.spawn_tile(tile),
         .debug_defeat(defeat),.spawn_ack(ack),.enemy_defeated(dead),
         .move_tick(move_tick),.spawn_busy(spawn_busy),.player_tile(player_tile),
+        .shot_fired(shot_fired),.aim(aim),.shot_hit(shot_hit),
         .occupied(occupied),.active(active),.read_id(id),.read_active(valid),
         .read_x(x),.read_y(y),.read_hp(hp),.read_type(kind),.read_state(state),
         .read_cooldown(cooldown));
@@ -35,6 +40,13 @@ module tb_enemy_manager;
     endtask
     task sweep;
         begin move_tick=1; step; move_tick=0; repeat(48) step; end
+    endtask
+    task shoot(input [1:0] direction);
+        begin
+            aim=direction; shot_fired=1; step; shot_fired=0;
+            aim=~direction; // Changes after the trigger must not turn the shot.
+            repeat(52) step;
+        end
     endtask
     task spawn(input [7:0] where);
         begin tile=where; req=1; step; check(ack,"spawn accepted"); req=0; step; end
@@ -151,6 +163,40 @@ module tb_enemy_manager;
         move_tick=1; step; move_tick=0; repeat(4) step;
         defeat=1; step; defeat=0; repeat(48) step;
         check(active==0 && occupied==0,"interrupted move resurrected removed zombie");
+
+        // No wrap at an open map edge, even with an enemy on the next row.
+        clear=1; step; clear=0; map_bits=0; player_tile=8'h2f;
+        spawn(8'h30); shoot(2'd0);
+        id=0; #1; check(hp==3 && hits==0,"shot wrapped at right edge");
+
+        // A wall shields the far enemy. After the wall test, rebuild the demo.
+        clear=1; step; clear=0; player_tile=8'h21; map_bits[8'h23]=1;
+        spawn(8'h25); shoot(2'd0);
+        check(hp==3 && hits==0,"shot hit enemy through a wall");
+        shoot(2'd1);
+        check(hp==3 && hits==0,"empty corridor reported a hit");
+
+        clear=1; step; clear=0; map_bits=0;
+        spawn(8'h25); spawn(8'h23); // Lower slot is farther away.
+        i=deaths;
+        shoot(2'd0);
+        check(hp==3 && hits==1 && deaths==i,"shot selected the farther slot");
+        id=1; #1; check(hp==2,"first hit did not reduce HP");
+        shoot(2'd0); check(hp==1 && deaths==i,"second hit killed too early");
+        shoot(2'd0);
+        check(hits==3 && deaths==i+1 && !valid && !occupied[8'h23] && occupied[8'h25],
+              "third hit did not free exactly the nearer zombie");
+        spawn(8'h24); #1;
+        check(valid && hp==3,"reused slot kept old damage");
+
+        // A ray and movement tick together use the pre-move tile ownership.
+        clear=1; step; clear=0; player_tile=8'h21;
+        spawn(8'h51);
+        while(!dut.field_ready) step;
+        aim=2'd1; shot_fired=1; move_tick=1; step;
+        shot_fired=0; move_tick=0; repeat(52) step;
+        id=0; #1;
+        check(hp==2 && occupied[8'h51],"movement conflicted with a shot");
         $display("TB_ENEMY_MANAGER: PASS"); $finish;
     end
     initial begin #200000; $fatal(1,"timeout"); end

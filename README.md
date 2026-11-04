@@ -63,7 +63,7 @@ Use Vivado's **Add Sources** to add new files to your existing project, or
 regenerate the project using the steps above. Keep simulation-only testbenches
 outside this design-source folder.
 
-## Fawaz: enemy movement demo (Tasks 3–6)
+## Fawaz: enemy movement and shooting demo (Tasks 3–7)
 
 `enemy_test_top` uses the map/game subsystem with `enemy_manager` replacing the
 temporary zombie stub. It keeps eight stable slots, initializes position/HP/type/
@@ -76,14 +76,16 @@ slot checked rotates each sweep so lower slots do not always win a contest.
 In your existing Vivado project:
 
 1. Add `FDP2026.srcs/sources_1/new/enemy/flow_field.v`,
+   `FDP2026.srcs/sources_1/new/enemy/enemy_combat.v`,
    `FDP2026.srcs/sources_1/new/enemy/enemy_manager.v` and
    `FDP2026.srcs/sources_1/new/demo/enemy_test_top.v` as design sources.
 2. Set `enemy_test_top` as top, with `STAGE=3`. Keep `constraints/map_preview.xdc`
-   enabled and the master XDC disabled. The demo retains the same pinout and
-   instance paths used by those constraints.
-3. Build/program and start with btnC. Enable SW0 to see zombie dots. btnR removes
-   the lowest active slot; btnD applies test player damage; btnU resets. Firing
-   and reload controls are unchanged. A mouse is optional for these tests.
+   enabled and the master XDC disabled. The demo XDC also assigns SW1 and SW2.
+3. Build/program and start with btnC. Enable SW0 to see the minimap. Set
+   SW2:SW1 to 00 for right, 01 for down, 10 for left, or 11 for up.
+   Press btnC to fire along the selected direction. LD4 shows whether the most
+   recent accepted shot hit. Each zombie takes three hits, and walls block shots.
+   Use btnL to reload, btnR for debug removal, btnD for test damage, and btnU to reset.
 
 Run the focused simulations from PowerShell with `./sim/enemy/run.ps1` (pass
 `-VivadoBin` if Vivado is installed elsewhere). Tests cover allocation, held

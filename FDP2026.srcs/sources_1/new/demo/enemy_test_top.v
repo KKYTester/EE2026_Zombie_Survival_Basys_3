@@ -1,6 +1,5 @@
 `timescale 1ns / 1ps
-// Enemy lifecycle demo: same board controls and pinout as map_preview_top.
-// btnR removes the lowest active slot.
+// Enemy demo: SW2:SW1 aims right, down, left or up. btnR is debug removal.
 module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     parameter USE_MOUSE=1, parameter ENABLE_2P=0,
     parameter GEN_SHIFT=26, parameter OVER_SHIFT=27,
@@ -9,7 +8,7 @@ module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     parameter FLASH_SHIFT=22, parameter RECOIL_SHIFT=23, parameter RELOAD_SHIFT=25,
     parameter WIN_WAVE=10, parameter WORLD_PATTERN=0, parameter WORLD_LATENCY=0,
     parameter integer MOVE_PERIOD=50_000_000)(
-    input wire clk, input wire sw0, input wire btnC, input wire btnU,
+    input wire clk, input wire sw0, input wire sw1, sw2, input wire btnC, input wire btnU,
     input wire btnL, input wire btnR, input wire btnD,
     inout wire PS2Clk, inout wire PS2Data,
     output wire [15:0] led, output wire [7:0] JB,
@@ -111,8 +110,19 @@ module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     wire [2:0] error_code, game_state;
     wire [6:0] wave; wire [1:0] health;
     wire spawn_req, spawn_ack, enemy_defeated, enemies_clear, shot_fired;
-    wire playing = game_state==3'd3;
     reg enemy_playing, enemy_clear;
+    wire shot_hit;
+    wire [15:0] game_led;
+    (* ASYNC_REG="TRUE" *) reg [1:0] aim_meta=0, aim_sync=0;
+    reg last_shot_hit;
+    always @(posedge clk) begin
+        aim_meta<={sw2,sw1};
+        aim_sync<=aim_meta;
+        if(rst || enemy_clear || shot_fired) last_shot_hit<=0;
+        else if(shot_hit) last_shot_hit<=1;
+    end
+    assign led={game_led[15:5],last_shot_hit,game_led[3:0]};
+    wire playing = game_state==3'd3;
     // Register the session controls before they fan out to the enemy tile mask.
     always @(posedge clk) begin
         if(rst) begin
@@ -140,7 +150,7 @@ module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .WIN_WAVE(WIN_WAVE)) game(
         .clk(clk),.rst(rst),
         .btn_c(btnC),.btn_l(btnL),.sw_map(sw0),
-        .oled_jb(JB),.seg(seg),.dp(dp),.an(an),.led(led),
+        .oled_jb(JB),.seg(seg),.dp(dp),.an(an),.led(game_led),
         .mouse_x(game_mouse_x),.mouse_y(game_mouse_y),.mouse_left(game_mouse_left),
         .mouse_right(game_mouse_right),.mouse_event(game_mouse_event),
         .published_map(published_map),.map_ready(map_ready),.map_busy(map_busy),
@@ -158,6 +168,7 @@ module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .playing(enemy_playing),.map_ready(map_ready && !map_busy),.map_bits(published_map),
         .spawn_req(spawn_req),.spawn_tile(spawn_tile),.debug_defeat(press_r),
         .move_tick(move_tick),.spawn_busy(spawn_busy),.player_tile(p1_addr),
+        .shot_fired(shot_fired),.aim(aim_sync),.shot_hit(shot_hit),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.occupied(occupied),
         .read_id(3'd0),.active(),.read_active(),.read_x(),.read_y(),
         .read_hp(),.read_type(),.read_state(),.read_cooldown());

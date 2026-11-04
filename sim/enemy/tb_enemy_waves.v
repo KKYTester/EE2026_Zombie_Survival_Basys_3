@@ -20,6 +20,7 @@ module tb_enemy_waves;
         .playing(playing),.map_ready(1'b1),.map_bits(map_bits),.spawn_req(req),
         .spawn_tile(tile),.debug_defeat(defeat),.spawn_ack(ack),.enemy_defeated(dead),
         .move_tick(1'b1),.spawn_busy(spawn_busy),.player_tile(8'h11),
+        .shot_fired(1'b0),.aim(2'd0),.shot_hit(),
         .occupied(occupied),.active(active),.read_id(3'd0),.read_active(),
         .read_x(),.read_y(),.read_hp(),.read_type(),.read_state(),.read_cooldown());
     always @(posedge clk) if(!rst && playing && !start) begin
