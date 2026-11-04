@@ -63,18 +63,19 @@ Use Vivado's **Add Sources** to add new files to your existing project, or
 regenerate the project using the steps above. Keep simulation-only testbenches
 outside this design-source folder.
 
-## Fawaz: enemy movement demo (Tasks 3–4)
+## Fawaz: enemy movement demo (Tasks 3–5)
 
 `enemy_test_top` uses the map/game subsystem with `enemy_manager` replacing the
 temporary zombie stub. It keeps eight stable slots, initializes position/HP/type/
 state/cooldown, acknowledges each spawn once, and reports occupancy and deaths.
-Zombies take tile steps toward the fixed player spawn twice per second on the
-minimap. Walls, the player tile and other zombies block movement. A zombie can
-get stuck when a route requires moving away from the player.
+Zombies follow a shared breadth-first search field toward the fixed player
+spawn on the minimap, with up to two tile steps per second. They wait when
+another zombie occupies the next tile and stop short of the player.
 
 In your existing Vivado project:
 
-1. Add `FDP2026.srcs/sources_1/new/enemy/enemy_manager.v` and
+1. Add `FDP2026.srcs/sources_1/new/enemy/flow_field.v`,
+   `FDP2026.srcs/sources_1/new/enemy/enemy_manager.v` and
    `FDP2026.srcs/sources_1/new/demo/enemy_test_top.v` as design sources.
 2. Set `enemy_test_top` as top, with `STAGE=3`. Keep `constraints/map_preview.xdc`
    enabled and the master XDC disabled. The demo retains the same pinout and

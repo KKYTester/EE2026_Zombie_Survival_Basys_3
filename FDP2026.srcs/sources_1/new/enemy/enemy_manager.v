@@ -37,18 +37,16 @@ module enemy_manager #(
     reg [ID_BITS-1:0] free_id, live_id;
     integer select_i, reset_i;
 
-    localparam [2:0] MOVE_IDLE=0, MOVE_READ=1, MOVE_PLAN=2, MOVE_CHECK=3, MOVE_APPLY=4;
+    localparam [2:0] MOVE_IDLE=0, MOVE_READ=1, MOVE_LOOKUP=2, MOVE_PLAN=3,
+                     MOVE_CHECK=4, MOVE_APPLY=5, MOVE_NEXT=6;
     reg [2:0] move_state;
     reg [ID_BITS-1:0] move_id;
-    reg [7:0] old_tile, target_tile, candidate, fallback;
-    wire [3:0] x = old_tile[3:0], y = old_tile[7:4];
-    wire [3:0] tx = target_tile[3:0], ty = target_tile[7:4];
-    wire [3:0] dx = (x < tx) ? tx-x : x-tx;
-    wire [3:0] dy = (y < ty) ? ty-y : y-ty;
-    // Stepping toward an in-range target cannot wrap across a map edge.
-    wire [3:0] next_x = (x < tx) ? x+4'd1 : (x > tx) ? x-4'd1 : x;
-    wire [3:0] next_y = (y < ty) ? y+4'd1 : (y > ty) ? y-4'd1 : y;
-    wire [7:0] x_step = {y,next_x}, y_step = {next_y,x};
+    reg [7:0] old_tile, target_tile, candidate;
+    wire field_ready, field_reachable;
+    wire [1:0] field_direction;
+    flow_field routes(.clk(clk),.reset(rst || clear),.enabled(playing && map_ready),
+        .walls(map_bits),.goal(player_tile),.read_tile(old_tile),.ready(field_ready),
+        .read_reachable(field_reachable),.read_direction(field_direction));
     wire can_step = candidate != old_tile && candidate != target_tile &&
                     !map_bits[candidate] && !occupied[candidate];
 
@@ -89,7 +87,9 @@ module enemy_manager #(
                               pos_x[live_id][COORD_FRAC_BITS +: 4]};
     wire remove_enemy = playing && debug_defeat && live_found;
     wire movement_enabled = playing && map_ready && !spawn_busy && !spawn_req;
-    wire apply_move = movement_enabled && !remove_enemy && move_state==MOVE_APPLY;
+    wire target_changed = player_tile!=target_tile;
+    wire apply_move = movement_enabled && !remove_enemy && !target_changed &&
+                      move_state==MOVE_APPLY;
     wire [7:0] set_tile = apply_move ? candidate : spawn_tile;
     wire [7:0] clear_tile = apply_move ? old_tile : remove_tile;
 
@@ -97,31 +97,35 @@ module enemy_manager #(
     always @(posedge clk) begin
         if(rst || clear || !playing || !map_ready) begin
             move_state<=MOVE_IDLE; move_id<=0; target_tile<=0;
-            old_tile<=0; candidate<=0; fallback<=0;
+            old_tile<=0; candidate<=0;
+        end else if(move_state!=MOVE_IDLE && target_changed) begin
+            move_state<=MOVE_IDLE;
         end else if(move_state!=MOVE_IDLE && (!movement_enabled || remove_enemy)) begin
             // Restart the slot if spawn selection or a removal interrupts it.
             move_state<=MOVE_READ;
         end else if(movement_enabled && !remove_enemy) begin
             case(move_state)
-                MOVE_IDLE: if(move_tick) begin
+                MOVE_IDLE: if(move_tick && field_ready) begin
                     move_id<=0; target_tile<=player_tile; move_state<=MOVE_READ;
                 end
                 MOVE_READ: if(active[move_id]) begin
                     old_tile<={pos_y[move_id][COORD_FRAC_BITS +: 4],
                                pos_x[move_id][COORD_FRAC_BITS +: 4]};
-                    move_state<=MOVE_PLAN;
-                end else if(move_id==MAX_ENEMIES-1) move_state<=MOVE_IDLE;
-                else move_id<=move_id+1'b1;
-                MOVE_PLAN: begin
-                    candidate <= (dx>=dy) ? x_step : y_step;
-                    fallback <= (dx>=dy) ? y_step : x_step;
+                    move_state<=MOVE_LOOKUP;
+                end else move_state<=MOVE_NEXT;
+                MOVE_LOOKUP: move_state<=MOVE_PLAN;
+                MOVE_PLAN: if(field_reachable) begin
+                    case(field_direction)
+                        2'd0: candidate<=old_tile-8'd1;
+                        2'd1: candidate<=old_tile+8'd1;
+                        2'd2: candidate<=old_tile-8'd16;
+                        2'd3: candidate<=old_tile+8'd16;
+                    endcase
                     move_state<=MOVE_CHECK;
-                end
-                MOVE_CHECK: if(can_step) move_state<=MOVE_APPLY;
-                else if(candidate!=fallback) candidate<=fallback;
-                else if(move_id==MAX_ENEMIES-1) move_state<=MOVE_IDLE;
-                else begin move_id<=move_id+1'b1; move_state<=MOVE_READ; end
-                MOVE_APPLY: if(move_id==MAX_ENEMIES-1) move_state<=MOVE_IDLE;
+                end else move_state<=MOVE_NEXT;
+                MOVE_CHECK: move_state<=can_step ? MOVE_APPLY : MOVE_NEXT;
+                MOVE_APPLY: move_state<=MOVE_NEXT;
+                MOVE_NEXT: if(move_id==MAX_ENEMIES-1) move_state<=MOVE_IDLE;
                 else begin move_id<=move_id+1'b1; move_state<=MOVE_READ; end
                 default: move_state<=MOVE_IDLE;
             endcase

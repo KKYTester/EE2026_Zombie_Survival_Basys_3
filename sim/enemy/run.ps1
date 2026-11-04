@@ -7,6 +7,7 @@ $sourceRoot = Join-Path $repoRoot 'FDP2026.srcs/sources_1/new'
 Push-Location $runDir
 try {
     & "$VivadoBin/xvlog.bat" "$sourceRoot/enemy/enemy_manager.v" `
+        "$sourceRoot/enemy/flow_field.v" `
         "$sourceRoot/game/wave_controller.v" "$sourceRoot/game/spawn_finder.v" `
         "$sourceRoot/map/lfsr16.v" "$PSScriptRoot/tb_enemy_manager.v" "$PSScriptRoot/tb_enemy_waves.v"
     if ($LASTEXITCODE -ne 0) { throw 'Verilog compilation failed' }

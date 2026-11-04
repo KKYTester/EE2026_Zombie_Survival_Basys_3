@@ -84,35 +84,49 @@ module tb_enemy_manager;
         req=0; rst=0; step; spawn(8'h12);
         check(acks==12 && deaths==3,"event accounting");
 
-        // Wall on the preferred axis forces a step on the other axis.
+        // The only route to 15 starts by stepping down, away from the goal.
         clear=1; step; clear=0;
-        player_tile=8'h25; map_bits[8'h12]=1;
-        spawn(8'h11); sweep;
+        player_tile=8'h15; map_bits={256{1'b1}};
+        map_bits[8'h11]=0; map_bits[8'h21]=0; map_bits[8'h31]=0;
+        map_bits[8'h32]=0; map_bits[8'h33]=0; map_bits[8'h34]=0;
+        map_bits[8'h35]=0; map_bits[8'h25]=0; map_bits[8'h15]=0;
+        map_bits[8'h07]=0;
+        spawn(8'h11); spawn(8'h07);
+        while(!dut.field_ready) step;
+        sweep;
         id=0; #1;
-        check(occupied==(256'd1<<8'h21) && x==384 && y==640,
-              "wall fallback or position/mask mismatch");
-        map_bits[8'h22]=1; sweep;
-        check(occupied==(256'd1<<8'h21),"blocked zombie moved");
-        map_bits=0;
+        check(occupied==((256'd1<<8'h21)|(256'd1<<8'h07)) && x==384 && y==640,
+              "detour, isolated tile, or position/mask mismatch");
+        repeat(8) sweep;
+        check(occupied==((256'd1<<8'h25)|(256'd1<<8'h07)),
+              "zombie did not follow corridor or stop short of player");
 
         // Two zombies want tile 32. Only the first can claim it.
         clear=1; step; clear=0;
-        player_tile=8'h42; spawn(8'h31); spawn(8'h33);
-        map_bits[8'h43]=1;
+        player_tile=8'h42; map_bits=0; map_bits[8'h41]=1; map_bits[8'h43]=1;
+        spawn(8'h31); spawn(8'h33);
+        while(!dut.field_ready) step;
         spawn_busy=1; sweep;
         check(occupied[8'h31] && occupied[8'h33],"movement during spawn search");
         spawn_busy=0; sweep;
         check(occupied==((256'd1<<8'h32)|(256'd1<<8'h33)),"two slots claimed one tile");
         sweep;
         check(!occupied[8'h42] && occupied[8'h32],"zombie stepped onto player");
+        // Rebuild for a changed target. Old arrows must not be used meanwhile.
+        player_tile=8'h12; sweep;
+        check(occupied[8'h32] && occupied[8'h33],"stale field used after goal change");
+        while(!dut.field_ready) step;
+        sweep;
+        check(occupied[8'h22] && occupied[8'h23],"new goal did not redirect movement");
 
         // A removal between validation and commit invalidates the pending move.
         clear=1; step; clear=0; map_bits=0;
         spawn(8'h02);
-        move_tick=1; step; move_tick=0; repeat(3) step;
+        while(!dut.field_ready) step;
+        move_tick=1; step; move_tick=0; repeat(4) step;
         defeat=1; step; defeat=0; repeat(48) step;
         check(active==0 && occupied==0,"interrupted move resurrected removed zombie");
         $display("TB_ENEMY_MANAGER: PASS"); $finish;
     end
-    initial begin #100000; $fatal(1,"timeout"); end
+    initial begin #200000; $fatal(1,"timeout"); end
 endmodule

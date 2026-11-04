@@ -8,7 +8,7 @@ module tb_enemy_waves;
     wire [255:0] occupied;
     wire [6:0] wave,remaining;
     wire [5:0] alive;
-    integer i,cycles,spawns=0,kills=0,live_count;
+    integer i,cycles,spawns=0,kills=0,moves=0,live_count;
     always #5 clk=~clk;
     wave_controller #(.SPAWN_SHIFT(2),.CLEAR_SHIFT(2),.MIN_DIST(2),.WIN_WAVE(2)) waves(
         .clk(clk),.rst(rst),.play_start(start),.playing(playing),.map_bits(map_bits),
@@ -25,6 +25,7 @@ module tb_enemy_waves;
     always @(posedge clk) if(!rst && playing && !start) begin
         if(ack) spawns=spawns+1;
         if(dead) kills=kills+1;
+        if(enemies.apply_move) moves=moves+1;
     end
     initial begin
         map_bits=0;
@@ -35,7 +36,7 @@ module tb_enemy_waves;
         cycles=0;
         while(!won && cycles<10000) begin
             // Interleave kills with spawning, leaving time for registered events.
-            defeat=(cycles%11==0);
+            defeat=enemies.field_ready && (cycles%41==0);
             @(negedge clk); cycles=cycles+1;
             live_count=0;
             for(i=0;i<8;i=i+1) live_count=live_count+active[i];
@@ -46,6 +47,7 @@ module tb_enemy_waves;
         defeat=0;
         if(!won || wave!=2 || remaining!=0 || active!=0 || spawns!=8 || kills!=8)
             $fatal(1,"wave completion: wave=%0d spawns=%0d kills=%0d",wave,spawns,kills);
+        if(moves==0) $fatal(1,"no movement during wave integration test");
         playing=0; repeat(3) @(negedge clk);
         playing=1; start=1; @(negedge clk); start=0;
         if(wave!=1 || remaining!=3 || alive!=0 || active!=0)
