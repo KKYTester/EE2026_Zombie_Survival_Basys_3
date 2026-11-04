@@ -98,13 +98,24 @@ module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     wire [6:0] wave; wire [1:0] health;
     wire spawn_req, spawn_ack, enemy_defeated, enemies_clear, shot_fired;
     wire playing = game_state==3'd3;
+    reg enemy_playing, enemy_clear;
+    // Register the session controls before they fan out to the enemy tile mask.
+    always @(posedge clk) begin
+        if(rst) begin
+            enemy_playing<=0;
+            enemy_clear<=1;
+        end else begin
+            enemy_playing<=playing;
+            enemy_clear<=enemies_clear;
+        end
+    end
     wire spawn_busy;
     localparam integer MOVE_COUNTER_BITS = (MOVE_PERIOD>1) ? $clog2(MOVE_PERIOD) : 1;
     reg [MOVE_COUNTER_BITS-1:0] move_counter;
-    wire move_tick = playing && move_counter==MOVE_PERIOD-1;
+    wire move_tick = enemy_playing && move_counter==MOVE_PERIOD-1;
     // Clock enable for two movement sweeps per second at 100 MHz.
     always @(posedge clk) begin
-        if(rst || enemies_clear || !playing || move_tick) move_counter<=0;
+        if(rst || enemy_clear || !enemy_playing || move_tick) move_counter<=0;
         else move_counter<=move_counter+1'b1;
     end
     game_core #(.STAGE(STAGE),.DEBOUNCE_CYCLES(DEBOUNCE_CYCLES),.ENABLE_2P(ENABLE_2P),
@@ -129,9 +140,9 @@ module enemy_test_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .enemies_clear(enemies_clear),.shot_fired(shot_fired));
 
     // ---------------- Enemy records and spawn handshake ----------------
-    enemy_manager enemies(.clk(clk),.rst(rst),.clear(enemies_clear),
-        .playing(playing),.map_ready(map_ready && !map_busy),.map_bits(published_map),
-        .spawn_req(spawn_req),.spawn_tile(spawn_tile),.debug_defeat(press_r && playing),
+    enemy_manager enemies(.clk(clk),.rst(rst),.clear(enemy_clear),
+        .playing(enemy_playing),.map_ready(map_ready && !map_busy),.map_bits(published_map),
+        .spawn_req(spawn_req),.spawn_tile(spawn_tile),.debug_defeat(press_r),
         .move_tick(move_tick),.spawn_busy(spawn_busy),.player_tile(p1_addr),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.occupied(occupied),
         .read_id(3'd0),.active(),.read_active(),.read_x(),.read_y(),
