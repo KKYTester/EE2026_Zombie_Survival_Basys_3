@@ -2,6 +2,7 @@
 set root [file normalize [file join [file dirname [info script]] ../..]]
 set out [file join $root build enemy_verify]
 file mkdir $out
+cd $out
 create_project -in_memory -part xc7a35tcpg236-1
 set_property target_language Verilog [current_project]
 set_property simulator_language Mixed [current_project]
@@ -19,6 +20,10 @@ update_compile_order -fileset sources_1
 synth_design -top enemy_test_top -part xc7a35tcpg236-1
 opt_design
 place_design
+phys_opt_design
+report_utilization -hierarchical -file [file join $out placed_utilization.rpt]
+report_timing_summary -file [file join $out placed_timing.rpt]
+write_checkpoint -force [file join $out placed.dcp]
 route_design
 report_utilization -file [file join $out utilization.rpt]
 report_timing_summary -file [file join $out timing.rpt]

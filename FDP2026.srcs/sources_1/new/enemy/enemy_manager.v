@@ -23,7 +23,6 @@ module enemy_manager #(
     output reg [15:0] read_cooldown
 );
     localparam [31:0] HALF_TILE = 32'd1 << (COORD_FRAC_BITS-1);
-    localparam [31:0] MAP_LIMIT = 32'd16 << COORD_FRAC_BITS;
     localparam [1:0] IDLE = 2'd0;
     reg [31:0] pos_x [0:MAX_ENEMIES-1];
     reg [31:0] pos_y [0:MAX_ENEMIES-1];
@@ -34,7 +33,7 @@ module enemy_manager #(
     reg request_seen;
     reg free_found, live_found;
     reg [ID_BITS-1:0] free_id, live_id;
-    integer select_i, mask_i, reset_i;
+    integer select_i, reset_i;
 
     // Priority encoders: choose the lowest free/live index.
     always @* begin
@@ -47,15 +46,6 @@ module enemy_manager #(
                 live_found=1; live_id=select_i;
             end
         end
-    end
-
-    // Rebuild the tile mask from live records; bounds checks prevent wrapping.
-    always @* begin
-        occupied=0;
-        for(mask_i=0; mask_i<MAX_ENEMIES; mask_i=mask_i+1)
-            if(active[mask_i] && pos_x[mask_i]<MAP_LIMIT && pos_y[mask_i]<MAP_LIMIT)
-                occupied[{pos_y[mask_i][COORD_FRAC_BITS +: 4],
-                          pos_x[mask_i][COORD_FRAC_BITS +: 4]}]=1'b1;
     end
 
     // Inactive/invalid IDs return zeros instead of stale records.
@@ -74,10 +64,12 @@ module enemy_manager #(
 
     wire accept_spawn = playing && map_ready && spawn_req && !request_seen &&
                         free_found && !map_bits[spawn_tile] && !occupied[spawn_tile];
+    wire [7:0] remove_tile = {pos_y[live_id][COORD_FRAC_BITS +: 4],
+                              pos_x[live_id][COORD_FRAC_BITS +: 4]};
     always @(posedge clk) begin
         spawn_ack<=0; enemy_defeated<=0;
         if(rst || clear) begin
-            active<=0; request_seen<=0;
+            active<=0; occupied<=0; request_seen<=0;
             for(reset_i=0; reset_i<MAX_ENEMIES; reset_i=reset_i+1) begin
                 pos_x[reset_i]<=0; pos_y[reset_i]<=0; hp[reset_i]<=0;
                 kind[reset_i]<=0; behaviour[reset_i]<=IDLE; cooldown[reset_i]<=0;
@@ -87,6 +79,8 @@ module enemy_manager #(
             if(!spawn_req) request_seen<=0;
             if(accept_spawn) begin
                 active[free_id]<=1;
+                // Registered occupancy keeps tile decoding off the spawn-search path.
+                occupied[spawn_tile]<=1;
                 pos_x[free_id]<=({28'd0,spawn_tile[3:0]} << COORD_FRAC_BITS) + HALF_TILE;
                 pos_y[free_id]<=({28'd0,spawn_tile[7:4]} << COORD_FRAC_BITS) + HALF_TILE;
                 hp[free_id]<=INITIAL_HP; kind[free_id]<=0;
@@ -97,6 +91,8 @@ module enemy_manager #(
             // target different slots. A full pool retries on the next cycle.
             if(playing && debug_defeat && live_found) begin
                 active[live_id]<=0; hp[live_id]<=0;
+                // Spawn checks guarantee one live zombie per tile in this task.
+                occupied[remove_tile]<=0;
                 behaviour[live_id]<=IDLE; cooldown[live_id]<=0;
                 enemy_defeated<=1;
             end
