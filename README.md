@@ -63,6 +63,34 @@ Use Vivado's **Add Sources** to add new files to your existing project, or
 regenerate the project using the steps above. Keep simulation-only testbenches
 outside this design-source folder.
 
+## Fawaz: enemy lifecycle demo (Task 3)
+
+`enemy_test_top` uses the map/game subsystem with `enemy_manager` replacing the
+temporary zombie stub. It keeps eight stable slots, initializes position/HP/type/
+state/cooldown, acknowledges each spawn once, and reports occupancy and deaths.
+Zombies remain stationary; movement and real combat are later tasks.
+
+In your existing Vivado project:
+
+1. Add `FDP2026.srcs/sources_1/new/enemy/enemy_manager.v` and
+   `FDP2026.srcs/sources_1/new/demo/enemy_test_top.v` as design sources.
+2. Set `enemy_test_top` as top, with `STAGE=3`. Keep `constraints/map_preview.xdc`
+   enabled and the master XDC disabled. The demo retains the same pinout and
+   instance paths used by those constraints.
+3. Build/program and start with btnC. Enable SW0 to see zombie dots. btnR removes
+   the lowest active slot; btnD applies test player damage; btnU resets. Firing
+   and reload controls are unchanged. A mouse is optional for these tests.
+
+Run the focused simulations from PowerShell with `./sim/enemy/run.ps1` (pass
+`-VivadoBin` if Vivado is installed elsewhere). Tests cover allocation, held
+requests, capacity, record reuse, reset, simultaneous events, and real wave
+controller integration through two waves and restart. Testbenches belong in
+Simulation Sources only.
+
+For an independent full build, run Vivado in batch mode with
+`-source sim/enemy/build_demo.tcl`. Reports and the bitstream go under
+`build/enemy_verify/`. The script does not modify the existing project.
+
 ## Member 4: map and game subsystem
 
 This branch includes a standalone map/game/UI demo for the Basys 3 and a
