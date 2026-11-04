@@ -27,6 +27,8 @@ module tb_enemy_waves;
         .spawn_tile(tile),.debug_defeat(defeat),.spawn_ack(ack),.enemy_defeated(dead),
         .move_tick(1'b1),.spawn_busy(spawn_busy),.player_tile(player_tile),
         .shot_fired(shot_fired),.aim(2'd0),.shot_hit(shot_hit),.player_hit(player_hit),
+        .player_active(1'b1),.player2_active(1'b0),.player2_tile(8'd0),
+        .shot_fired_p2(1'b0),.aim_p2(2'd0),
         .occupied(occupied),.active(active),.read_id(3'd0),.read_active(),
         .read_x(),.read_y(),.read_hp(),.read_type(),.read_state(),.read_cooldown());
     weapon_ctrl #(.FLASH_SHIFT(3),.RECOIL_SHIFT(6),.RELOAD_SHIFT(5)) weapon(
@@ -89,7 +91,7 @@ module tb_enemy_waves;
         kills_before_restart=kills;
         rst=1; playing=0; @(negedge clk);
         if(active!=0 || occupied!=0 || shot_fired || shot_hit || player_hit || dead ||
-           req || ack || enemies.attack_timer!=0 || health!=3 || ammo!=6)
+           req || ack || enemies.g_attack[0].attack_timer!=0 || health!=3 || ammo!=6)
             $fatal(1,"reset left wave or combat state active");
         rst=0; playing=1; start=1; @(negedge clk); start=0;
         if(wave!=1 || remaining!=3 || alive!=0 || active!=0)

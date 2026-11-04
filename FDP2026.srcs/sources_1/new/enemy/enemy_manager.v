@@ -5,6 +5,7 @@ module enemy_manager #(
     parameter integer COORD_FRAC_BITS = 8, // supported range: 1..27
     parameter [7:0] INITIAL_HP = 8'd3,
     parameter integer ATTACK_COOLDOWN_CYCLES = 100_000_000,
+    parameter TWO_PLAYERS = 0,
     parameter integer ID_BITS = (MAX_ENEMIES > 1) ? $clog2(MAX_ENEMIES) : 1
 )(
     input wire clk, rst, clear, playing, map_ready,
@@ -16,8 +17,14 @@ module enemy_manager #(
     input wire [7:0] player_tile,
     input wire shot_fired,
     input wire [1:0] aim,
+    input wire player_active, player2_active,
+    input wire [7:0] player2_tile,
+    input wire shot_fired_p2,
+    input wire [1:0] aim_p2,
+    output wire shot_ready, shot_ready_p2,
     output wire shot_hit,
-    output reg player_hit,
+    output wire shot_hit_player, // 0 = P1, 1 = P2; valid with shot_hit
+    output wire player_hit, player_hit_p2,
     output reg spawn_ack, enemy_defeated,
     output reg [255:0] occupied,
     output reg [MAX_ENEMIES-1:0] active,
@@ -49,14 +56,60 @@ module enemy_manager #(
     reg [ID_BITS-1:0] free_id, live_id;
     integer select_i, reset_i, hit_i;
 
-    wire ray_busy, hit_valid;
+    wire p1_live = !TWO_PLAYERS || player_active;
+    wire p2_live = TWO_PLAYERS && player2_active;
+    wire combat_enabled = playing && map_ready && !rst && !clear;
+    wire ray_busy, hit_valid, fire_ray, fire_p2, shots_waiting;
+    wire [7:0] ray_origin;
+    wire [1:0] ray_aim;
     wire [7:0] hit_tile;
-    enemy_combat combat(.clk(clk),.reset(rst || clear),.enabled(playing && map_ready),
-        .shot_fired(shot_fired),.player_tile(player_tile),.aim(aim),.walls(map_bits),
-        .occupied(occupied),.busy(ray_busy),.hit_valid(hit_valid),.hit_tile(hit_tile));
     reg hit_found, damage_pending, debug_pending;
+    reg ray_player, damage_player;
     reg [ID_BITS-1:0] hit_id, damage_id;
     reg [7:0] damage_tile;
+
+    generate if(TWO_PLAYERS) begin : g_shots
+        reg pending_p1, pending_p2;
+        reg [7:0] origin_p1, origin_p2;
+        reg [1:0] facing_p1, facing_p2;
+        wire issue_ready = combat_enabled && !ray_busy && !damage_pending;
+        assign shot_ready = combat_enabled && p1_live && !pending_p1;
+        assign shot_ready_p2 = combat_enabled && p2_live && !pending_p2;
+        wire capture_p1 = shot_ready && shot_fired;
+        wire capture_p2 = shot_ready_p2 && shot_fired_p2;
+        assign fire_ray = issue_ready && (pending_p1 || pending_p2);
+        assign fire_p2 = !pending_p1;
+        assign ray_origin = fire_p2 ? origin_p2 : origin_p1;
+        assign ray_aim = fire_p2 ? facing_p2 : facing_p1;
+        assign shots_waiting = pending_p1 || pending_p2 || capture_p1 || capture_p2;
+
+        // One mailbox per player. Resolve P1 first when both are pending.
+        always @(posedge clk) begin
+            if(!combat_enabled) begin pending_p1<=0; pending_p2<=0; end
+            else begin
+                if(fire_ray && !fire_p2) pending_p1<=0;
+                if(fire_ray && fire_p2) pending_p2<=0;
+                if(capture_p1) begin
+                    pending_p1<=1; origin_p1<=player_tile; facing_p1<=aim;
+                end
+                if(capture_p2) begin
+                    pending_p2<=1; origin_p2<=player2_tile; facing_p2<=aim_p2;
+                end
+            end
+        end
+    end else begin : g_single_shot
+        assign shot_ready = combat_enabled && !ray_busy && !damage_pending;
+        assign shot_ready_p2 = 0;
+        assign fire_ray = shot_fired;
+        assign fire_p2 = 0;
+        assign ray_origin = player_tile;
+        assign ray_aim = aim;
+        assign shots_waiting = shot_fired;
+    end endgenerate
+
+    enemy_combat combat(.clk(clk),.reset(rst || clear),.enabled(playing && map_ready),
+        .shot_fired(fire_ray),.player_tile(ray_origin),.aim(ray_aim),.walls(map_bits),
+        .occupied(occupied),.busy(ray_busy),.hit_valid(hit_valid),.hit_tile(hit_tile));
     // Resolve the tile to a slot before applying damage on the next clock.
     always @* begin
         hit_found=0; hit_id=0;
@@ -69,17 +122,21 @@ module enemy_manager #(
             end
     end
     // Hold tile ownership stable from the trigger through damage commit.
-    wire combat_locked = shot_fired || ray_busy || damage_pending;
+    wire combat_locked = shots_waiting || ray_busy || damage_pending;
     assign shot_hit = damage_pending && playing && map_ready && !rst && !clear;
+    assign shot_hit_player = damage_player;
     wire lethal_hit = shot_hit && hp[damage_id]<=8'd1;
     always @(posedge clk) begin
         if(rst || clear || !playing || !map_ready) begin
             damage_pending<=0; debug_pending<=0;
+            ray_player<=0; damage_player<=0;
         end else begin
+            if(fire_ray) ray_player<=fire_p2;
             damage_pending<=hit_valid && hit_found;
             if(hit_valid && hit_found) begin
                 damage_id<=hit_id;
                 damage_tile<=hit_tile;
+                damage_player<=ray_player;
             end
             debug_pending<=combat_locked && (debug_defeat || debug_pending);
         end
@@ -96,8 +153,11 @@ module enemy_manager #(
     wire [1:0] field_direction;
     flow_field routes(.clk(clk),.reset(rst || clear),.enabled(playing && map_ready),
         .walls(map_bits),.goal(player_tile),.read_tile(old_tile),.ready(field_ready),
+        .goal_active(p1_live),.goal2_active(p2_live),.goal2(player2_tile),
         .read_reachable(field_reachable),.read_direction(field_direction));
-    wire can_step = candidate != old_tile && candidate != target_tile &&
+    wire can_step = candidate != old_tile &&
+                    !(p1_live && candidate==target_tile) &&
+                    !(p2_live && candidate==player2_tile) &&
                     !map_bits[candidate] && !occupied[candidate];
 
     function [31:0] tile_center(input [3:0] tile_axis);
@@ -132,14 +192,16 @@ module enemy_manager #(
     end
 
     wire accept_spawn = playing && map_ready && !combat_locked && spawn_req && !request_seen &&
-                        free_found && !map_bits[spawn_tile] && !occupied[spawn_tile];
+                        free_found && !map_bits[spawn_tile] && !occupied[spawn_tile] &&
+                        (!TWO_PLAYERS || !p1_live || spawn_tile!=player_tile) &&
+                        (!p2_live || spawn_tile!=player2_tile);
     wire debug_remove = playing && !combat_locked && (debug_defeat || debug_pending) && live_found;
     wire remove_enemy = debug_remove || lethal_hit;
     wire [ID_BITS-1:0] remove_id = lethal_hit ? damage_id : live_id;
     wire [7:0] remove_tile = lethal_hit ? damage_tile :
         {pos_y[live_id][COORD_FRAC_BITS +: 4], pos_x[live_id][COORD_FRAC_BITS +: 4]};
     wire movement_enabled = playing && map_ready && !combat_locked && !spawn_busy && !spawn_req;
-    wire target_changed = player_tile!=target_tile;
+    wire target_changed = TWO_PLAYERS ? !field_ready : player_tile!=target_tile;
     wire apply_move = movement_enabled && !remove_enemy && !target_changed &&
                       move_state==MOVE_APPLY;
     wire [7:0] set_tile = apply_move ? candidate : spawn_tile;
@@ -147,40 +209,51 @@ module enemy_manager #(
 
     localparam integer ATTACK_TIMER_BITS =
         (ATTACK_COOLDOWN_CYCLES>1) ? $clog2(ATTACK_COOLDOWN_CYCLES) : 1;
-    reg [ATTACK_TIMER_BITS-1:0] attack_timer;
-    reg [1:0] attack_dir;
-    reg [7:0] attack_origin, attack_tile;
-    reg attack_neighbor_valid;
+    wire [1:0] contact_hits;
+    assign player_hit=contact_hits[0];
+    assign player_hit_p2=contact_hits[1];
+    if(!TWO_PLAYERS) assign contact_hits[1]=0;
+    genvar player_index;
+    generate for(player_index=0; player_index<(TWO_PLAYERS ? 2 : 1);
+                 player_index=player_index+1) begin : g_attack
+        wire [7:0] contact_tile = player_index==0 ? player_tile : player2_tile;
+        wire contact_enabled = combat_enabled && (player_index==0 ? p1_live : p2_live);
+        reg [ATTACK_TIMER_BITS-1:0] attack_timer;
+        reg [1:0] attack_dir;
+        reg [7:0] attack_origin, attack_tile;
+        reg attack_neighbor_valid, hit;
+        assign contact_hits[player_index]=hit;
 
-    // Probe one edge-sharing tile per clock to share the occupancy lookup.
-    always @(posedge clk) begin
-        if(rst || clear || !playing || !map_ready) begin
-            attack_dir<=0;
-            attack_neighbor_valid<=0;
-        end else begin
-            attack_dir<=attack_dir+1'b1;
-            attack_origin<=player_tile;
-            case(attack_dir)
-                2'd0: begin attack_tile<=player_tile-8'd1;  attack_neighbor_valid<=player_tile[3:0]!=0; end
-                2'd1: begin attack_tile<=player_tile+8'd1;  attack_neighbor_valid<=player_tile[3:0]!=15; end
-                2'd2: begin attack_tile<=player_tile-8'd16; attack_neighbor_valid<=player_tile[7:4]!=0; end
-                2'd3: begin attack_tile<=player_tile+8'd16; attack_neighbor_valid<=player_tile[7:4]!=15; end
-            endcase
+        // Probe one edge-sharing tile per clock for this player.
+        always @(posedge clk) begin
+            if(!contact_enabled) begin
+                attack_dir<=0;
+                attack_neighbor_valid<=0;
+            end else begin
+                attack_dir<=attack_dir+1'b1;
+                attack_origin<=contact_tile;
+                case(attack_dir)
+                    2'd0: begin attack_tile<=contact_tile-8'd1;  attack_neighbor_valid<=contact_tile[3:0]!=0; end
+                    2'd1: begin attack_tile<=contact_tile+8'd1;  attack_neighbor_valid<=contact_tile[3:0]!=15; end
+                    2'd2: begin attack_tile<=contact_tile-8'd16; attack_neighbor_valid<=contact_tile[7:4]!=0; end
+                    2'd3: begin attack_tile<=contact_tile+8'd16; attack_neighbor_valid<=contact_tile[7:4]!=15; end
+                endcase
+            end
         end
-    end
 
-    // One shared grace period caps damage even when several zombies are adjacent.
-    always @(posedge clk) begin
-        player_hit<=0;
-        if(rst || clear || !playing || !map_ready) attack_timer<=0;
-        else if(attack_timer!=0) attack_timer<=attack_timer-1'b1;
-        else if(attack_neighbor_valid && attack_origin==player_tile &&
-                !map_bits[attack_origin] && !map_bits[attack_tile] &&
-                occupied[attack_tile] && !remove_enemy) begin
-            player_hit<=1;
-            attack_timer<=ATTACK_COOLDOWN_CYCLES-1;
+        // Multiple adjacent zombies share this player's cooldown.
+        always @(posedge clk) begin
+            hit<=0;
+            if(!contact_enabled) attack_timer<=0;
+            else if(attack_timer!=0) attack_timer<=attack_timer-1'b1;
+            else if(attack_neighbor_valid && attack_origin==contact_tile &&
+                    !map_bits[attack_origin] && !map_bits[attack_tile] &&
+                    occupied[attack_tile] && !remove_enemy) begin
+                hit<=1;
+                attack_timer<=ATTACK_COOLDOWN_CYCLES-1;
+            end
         end
-    end
+    end endgenerate
 
     // Read, plan, check and apply one slot at a time.
     always @(posedge clk) begin

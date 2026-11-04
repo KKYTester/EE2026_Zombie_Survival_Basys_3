@@ -31,6 +31,8 @@ module tb_enemy_manager;
         .debug_defeat(defeat),.spawn_ack(ack),.enemy_defeated(dead),
         .move_tick(move_tick),.spawn_busy(spawn_busy),.player_tile(player_tile),
         .shot_fired(shot_fired),.aim(aim),.shot_hit(shot_hit),.player_hit(player_hit),
+        .player_active(1'b1),.player2_active(1'b0),.player2_tile(8'd0),
+        .shot_fired_p2(1'b0),.aim_p2(2'd0),
         .occupied(occupied),.active(active),.read_id(id),.read_active(valid),
         .read_x(x),.read_y(y),.read_hp(hp),.read_type(kind),.read_state(state),
         .read_cooldown(cooldown));

@@ -158,6 +158,27 @@ Before implementing sprites, jointly specify:
 
 ### Enemy records and multiplayer (P4, P5, X1, X2)
 
+Task 11 adds an opt-in host interface on `enemy_manager`. Set
+`TWO_PLAYERS=1` and provide the two tile positions and active flags. The host
+derives each flag from connection and health state. The flow field seeds both
+eligible floor tiles before expanding either. Equal routes favor P1.
+
+- Present each accepted weapon shot with its position and aim when that
+  player's `shot_ready` or `shot_ready_p2` is high. Each player has one
+  pending slot. Simultaneous shots are resolved P1 first, with each shot's
+  origin and aim captured at acceptance. Damage uses the occupancy left by
+  the preceding shot. `shot_hit_player` identifies the shooter on `shot_hit`.
+- Route `player_hit` and `player_hit_p2` to separate health controllers. Each
+  active player has an independent contact cooldown. Losing eligibility
+  removes that player from targeting and disables their contact damage.
+- The host's spawn selector must exclude both active player tiles. The enemy
+  manager leaves an invalid request unacknowledged, so the host must reselect
+  if a player moves onto the pending spawn tile.
+- The host can snapshot the packed `render_x`, `render_y` and `active` buses
+  by slot. The record lookup exposes HP and type if the packet needs them.
+  The demo remains single-player. Per-player weapons, the spawn selector
+  update and the UART game packet layout belong to full host integration.
+
 Propose a fixed slot pool rather than shifting surviving zombies on death:
 
 | Field | Provisional representation | Purpose |
