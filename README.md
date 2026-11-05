@@ -72,15 +72,19 @@ recursively, and the hardware validation script uses the grouped paths.
 See [DeveloperGuide.md](DeveloperGuide.md) for prototype details, controls,
 rendering, and validation instructions.
 
-## Integrated random-map game demo
+## Integrated random-map game
 
-`My_Top_Module` now combines the map/game/UI demo with the raycaster and player
+`My_Top_Module` combines the map, game flow and UI with the raycaster and player
 controller. Starting with btnC or clicking the enabled 1-player title option
 generates a validated random map and shows its 3D walls behind the existing
-weapon and HUD. The original `map_preview_top` remains a standalone flat-world
-demo. Enemy AI and combat targeting still use the original temporary stub.
+weapon and HUD. Enemy AI and combat targeting still use a temporary stub.
 
 ### Run the integrated game
+
+`My_Top_Module` is the only board top. The standalone map preview and its
+alternate constraints have been removed. In an existing Vivado project, remove
+the old `demo/` sources and preview constraints, then add `game/zombie_stub.v`
+and `ui/switch_toggle.v`, or regenerate the project as described above.
 
 Use the default top `My_Top_Module` and `Basys3_Master.xdc`; no alternate pin file
 is needed. Regenerate the project or add all new design sources recursively to
@@ -94,7 +98,7 @@ owns the only OLED driver and the final-pixel bridge.
 | btnU / btnD | Move forward / backward relative to the view |
 | btnL / btnR | Strafe left / right |
 | Mouse horizontal movement during play | Turn continuously, one count per 1/1024 turn |
-| Left-click or btnC during play | Fire the demo pistol |
+| Left-click or btnC during play | Fire the pistol |
 | Right-click during play | Reload |
 | SW0 | Toggle the full map overlay; player marker follows movement |
 | SW13 / SW14, each flip | Test damage / defeat one stub zombie |
@@ -103,7 +107,7 @@ owns the only OLED driver and the final-pixel bridge.
 
 The 2-player option stays disabled. Menus, generating screen, hearts, ten waves,
 weapon animation/ammo/reload, damage effects, victory/game-over screens and
-return-to-title behavior are retained from the demo. Firing emits the existing
+return-to-title behavior are integrated into the game. Firing emits the existing
 `shot_fired` event; it does not yet target enemies. Zombies are still map dots,
 without first-person sprites, navigation or attacks.
 
@@ -115,8 +119,6 @@ view to angle 128 (northeast). Each scan snapshots map and pose; completed
 column banks publish only during `game_core.frame_idle`. The renderer reads
 the core's look-ahead X/Y directly, including pixel (95,63), without putting a
 row-index division on the integrated pixel path.
-
-### Original map/game subsystem
 
 ### Current behaviour
 
@@ -146,52 +148,13 @@ Design folders are under `FDP2026.srcs/sources_1/new/`:
 | Folder | Responsibility |
 |---|---|
 | `map/` | Map system, generator, register storage, validator and LFSR |
-| `game/` | Game core, session flow, player health, waves and spawn selection |
+| `game/` | Game core, session flow, player health, waves, spawn selection and temporary enemy stub |
 | `ui/` | Pixel compositor, menus, HUD, weapon controller/sprite, overlays and display helpers |
-| `demo/` | `map_preview_top` and temporary `zombie_stub` |
 
 The course `Oled_Display.v` and `Ps2Interface.vhd` and the relative-motion
 `Mouse_Control_Delta.vhd` are reused from the shared source folder.
 `Mouse_Pointer` accumulates signed X/Y packet deltas into a 96x64 cursor;
-PS/2 positive Y moves the pointer upward. `constraints/map_preview.xdc` is the
-standalone demo's pin/timing file.
-
-### Run the standalone map/game demo
-
-The general creation script above selects `My_Top_Module` and the master XDC
-for team work. For this standalone demo:
-
-1. Create/open the Vivado project and include all Verilog and VHDL design
-   sources under `FDP2026.srcs/sources_1/new/`, including subfolders.
-2. In an existing project, use Add Sources for any new file that has not been
-   registered yet, especially `ui/pixel_compositor.v`.
-3. Set the top module to `map_preview_top`, with the generic `STAGE=3`.
-4. Add and enable `constraints/map_preview.xdc`. Disable
-   `FDP2026.srcs/constrs_1/new/Basys3_Master.xdc` for this demo; do not enable
-   both pin files together. Retain the generated-clock timing constraint.
-5. Run synthesis, implementation and Generate Bitstream. Board programming is
-   a separate action.
-
-### Demo controls
-
-| Control | Action |
-|---|---|
-| Mouse pointer + left-click | Select/confirm the enabled 1-player title option |
-| btnC | Confirm 1-player start; fire during gameplay |
-| Left-click during gameplay | Fire the pistol |
-| Right-click during gameplay | Reload a partially used magazine |
-| SW14 flip during gameplay | Temporary test action: defeat the oldest stub zombie (each flip = one) |
-| SW13 flip during gameplay | Temporary test action: lose one heart (each flip = one) |
-| SW15 up | Reset to the title and initialise the subsystem (put it down again to run) |
-| btnU, btnL, btnR, btnD | Not used: reserved for Member 1's movement controls |
-| SW0 off | World view with gameplay overlays |
-| SW0 on | Add the whole 16x16 map as a 64x64 overlay at x=32..95 |
-| Seven-segment display | Show the active map seed as four hexadecimal digits |
-
-On either end screen, a new left-click or btnC returns to the title after the
-input delay. The two-player option is disabled in the current demo. Shooting
-provides a `shot_fired` event; actual targeting and enemy damage belong to the
-combat integration. The standalone minimap markers show spawn locations; the integrated P1 marker follows movement.
+PS/2 positive Y moves the pointer upward.
 
 ### Integration contract
 
@@ -215,21 +178,6 @@ real player/enemy modules to its ports:
 Use the same published map for raycasting, player collision and enemy
 navigation. Keep the OLED driver and tail bridge owned by `game_core` rather
 than adding another OLED output driver during integration.
-
-### Local verification and repository scope
-
-Tests and detailed verification records are maintained in the separate local
-`map_preview` project. `sim/map/`, `docs/map/` and the obsolete
-`scripts/map/gen_weapon_overlay.py` are excluded from this branch's intended
-source-only layout. Keep the working `ui/weapon_overlay.v` and sprite artwork;
-the obsolete script does not regenerate the current reload-capable overlay.
-
-The feature branch reports that its standalone regression passed all 16 simulation targets, including
-five complete 6144-pixel OLED frames. Those checks cover the map, display,
-controls, menus, spawning, wave progression, weapon/reload behaviour and
-victory/restart. The latest RTL refactors still require fresh synthesis,
-implementation, timing/resource checks and board verification; existing
-bitstreams predate them.
 
 ### Integration validation
 

@@ -1,5 +1,5 @@
 `timescale 1ns / 1ps
-// Integrated single-player demo: game_core owns flow, UI and OLED output.
+// Integrated single-player game: game_core owns flow, UI and OLED output.
 // The temporary enemies/test switches are retained until combat integration.
 module My_Top_Module #(
     parameter DEBOUNCE_CYCLES=1000000,

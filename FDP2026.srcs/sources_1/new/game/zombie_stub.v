@@ -2,7 +2,7 @@
 // TEMPORARY stand-in for the enemy module (Member 2) so waves can be tested:
 //  - accepts every spawn request (spawn_ack one clock later) and remembers the
 //    tile in one of SLOTS slots (zombies do not move; SLOTS >= the wave controller's MAX_ALIVE);
-//  - defeat (btnR in the demo) removes the oldest zombie and pulses enemy_defeated;
+//  - defeat (the SW14 test action) removes the oldest zombie and pulses enemy_defeated;
 //  - occupied[] marks the tiles holding zombies (used for spawning and the map dots).
 // Replace with Member 2's enemy module, which implements the same handshake.
 module zombie_stub #(parameter SLOTS=8)(

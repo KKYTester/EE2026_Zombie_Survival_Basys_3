@@ -68,7 +68,7 @@ module mouse_top_tb;
         right_in=1; packet(0,0); right_in=0;
         repeat(250) @(negedge clk);
         if(board.game.ammo!==6 || board.game.weapon_reloading) $fatal(1,"Reload failed");
-        // Preserve the demo's game-over/retry flow via the real test switch.
+        // Check the game's game-over/retry flow via the real test switch.
         repeat(3) begin sw13=~sw13; repeat(20) @(negedge clk); end
         wait(board.game_state==4); repeat(270) @(negedge clk);
         confirm; wait(board.game_state==0);

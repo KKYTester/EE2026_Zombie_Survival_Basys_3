@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 // Debounced switch whose every flip (off->on or on->off) gives one
-// one-clock pulse. Used for the demo's temporary test actions, so a test
+// one-clock pulse. Used for the game's temporary test actions, so a test
 // event needs one flick instead of a push button.
 module switch_toggle #(parameter STABLE_CYCLES=1000000)(
     input wire clk, input wire rst, input wire switch_in,

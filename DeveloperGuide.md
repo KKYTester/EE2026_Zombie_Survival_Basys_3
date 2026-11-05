@@ -2,11 +2,11 @@
 
 ## Random-map integration
 
-The current top is the integrated demo described in README.md. The fixed-map
+The current top is the integrated game described in README.md. The fixed-map
 prototype below documents the renderer's retained defaults and original
 validation; its old top-level controls and resource figures are historical.
 The integrated top uses SW15 reset, game_core's OLED clock/output, runtime map
-and spawn inputs, and the demo UI. Mouse buttons now fire/reload rather than
+and spawn inputs, and the game UI. Mouse buttons now fire/reload rather than
 lighting LEDs. Existing parameter-map behavior remains available for isolated
 renderer/player regressions.
 
@@ -33,7 +33,7 @@ spawn/collision/bounds, mouse and btnC session starts, the disabled 2P option,
 fire/reload, damage, victory, return to title, and random-map restart. The OLED
 check decodes JB serial bits for complete 6,144-pixel frames and compares the
 world against a numerical ray reference, with existing weapon/HUD and minimap
-composition. The course driver remains unchanged; the demo's tail bridge
+composition. The course driver remains unchanged; the game's tail bridge
 supplies its missing last pixel.
 
 Integration validation (5 November 2026, Vivado 2025.2): all eight renderer-runner
@@ -66,6 +66,16 @@ power/control and PS/2), plus one clock output; this is not external-interface
 signoff. Physical mouse signaling, OLED appearance, controls and gameplay still
 need board checks. Enemy AI, 3D sprites and actual combat targeting remain stubs.
 
+
+Standalone preview cleanup (5 November 2026): removed the alternate map-preview
+top and constraints, and moved the two helpers still used by the game to
+`game/zombie_stub.v` and `ui/switch_toggle.v`. Their RTL and the main game
+behavior are unchanged. All eight renderer-runner simulations passed again,
+including the integrated flow and two complete OLED frames. Synthesis and
+full placement/routing passed with the same utilization and +0.357 ns setup /
++0.062 ns hold slack reported above, no unconstrained internal endpoints, and
+no DRC errors. The existing DSP recommendations, PS/2 CDC warnings and external
+timing limitations remain. No bitstream was generated or board programmed.
 
 ## Original first-person movement prototype
 
@@ -148,7 +158,7 @@ zero-delta/button-only packets. The value holds between events and clears on
 reset. X overflow saturates that packet's delta to -256 or +255 according to
 its sign. There are no accumulated positions or position-setting/limit inputs;
 The signed `y_delta` output has the same format and saturation, with positive
-values upward. `Mouse_Pointer` accumulates X/Y for the demo cursor, clamps to
+values upward. `Mouse_Pointer` accumulates X/Y for the menu cursor, clamps to
 96x64, and inverts Y for screen coordinates. Wheel movement is ignored. Mouse button outputs and the PS/2
 ports remain. Mouse clicks are indicators only; combat is not added.
 
