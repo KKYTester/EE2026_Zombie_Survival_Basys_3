@@ -41,6 +41,9 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
     map_display_mux display_mux(.px(px),.py(py),.minimap_mode(minimap_mode),
         .fp_pixel_data(ammo_pixel_data),.map_bits(map_bits),.p1_addr(p1_addr),
         .p2_addr(p2_addr),.seed(seed),.map_ready(map_ready),
+        // Player 2's yellow tile only in a 2P game: game_flow clears menu_sel
+        // when 1P starts, and it can only be 1 when ENABLE_2P is set.
+        .show_p2(ENABLE_2P!=0 && menu_sel),
         .busy(map_busy),.bfs_enabled(STAGE==3),.error_code(error_code),
         .pixel_data(map_pixel_data));
     zombie_overlay zombie_dots(.px(px),.py(py),.minimap_mode(minimap_mode),.zombies(zombie_tiles),

@@ -3,6 +3,7 @@ module map_display_mux(
     input wire [6:0] px, input wire [5:0] py,
     input wire minimap_mode, input wire [15:0] fp_pixel_data,
     input wire [255:0] map_bits, input wire [7:0] p1_addr,p2_addr,
+    input wire show_p2,                   // 1 only in a two-player game
     input wire [15:0] seed, input wire map_ready,busy,bfs_enabled,
     input wire [2:0] error_code, output reg [15:0] pixel_data);
     // Status ports retained for interface compatibility and a future HUD.
@@ -20,7 +21,7 @@ module map_display_mux(
             else begin
                 pixel_data=map_bits[mini_addr] ? WALL : FLOOR;
                 if(mini_addr==p1_addr) pixel_data=GREEN;
-                else if(mini_addr==p2_addr) pixel_data=YELLOW;
+                else if(show_p2 && mini_addr==p2_addr) pixel_data=YELLOW;
             end
         end
     end
