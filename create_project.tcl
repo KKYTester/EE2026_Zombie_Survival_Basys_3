@@ -28,9 +28,10 @@ if {[llength $source_files] == 0} {
     error "No HDL source files found in $source_dir"
 }
 add_files -fileset sources_1 -norecurse $source_files
+set_property include_dirs [list $source_dir] [get_filesets sources_1]
 
 add_files -fileset constrs_1 -norecurse \
-    [file join $root_dir FDP2026.srcs constrs_1 new Basys3_Master.xdc]
+    [list [file join $root_dir FDP2026.srcs constrs_1 new Basys3_Master.xdc]]
 
 set_property top My_Top_Module [get_filesets sources_1]
 update_compile_order -fileset sources_1
