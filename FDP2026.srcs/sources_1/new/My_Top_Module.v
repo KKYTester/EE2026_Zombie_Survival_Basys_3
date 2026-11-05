@@ -53,15 +53,13 @@ module My_Top_Module (
         .pmoden         (JB[7]         )
     );
 
-    wire [11:0] mouse_x;
+    wire signed [8:0] mouse_x_delta;
     wire mouse_left, mouse_middle, mouse_right, mouse_event;
-    // Supplied VHDL entity lives in Mouse_Control.vhd (not MouseCtl.vhd).
-    // Keep default origin and bounds; all optional configuration inputs idle.
-    MouseCtl u_MouseCtl (
-        .clk(clk), .rst(reset), .xpos(mouse_x), .ypos(), .zpos(),
+    // Relative movement permits continuous turning without position limits.
+    Mouse_Control_Delta u_Mouse_Control_Delta (
+        .clk(clk), .rst(reset), .x_delta(mouse_x_delta),
         .left(mouse_left), .middle(mouse_middle), .right(mouse_right),
-        .new_event(mouse_event), .value(12'd0),
-        .setx(1'b0), .sety(1'b0), .setmax_x(1'b0), .setmax_y(1'b0),
+        .new_event(mouse_event),
         .ps2_clk(ps2_clk), .ps2_data(ps2_data)
     );
     assign led = reset ? 16'd0 : {mouse_left, mouse_middle, mouse_right, 13'd0};
@@ -70,7 +68,7 @@ module My_Top_Module (
     Player_Controller u_Player_Controller (
         .clk(clk), .reset(reset), .game_tick(game_tick),
         .btnU(btnU), .btnL(btnL), .btnR(btnR), .btnD(btnD),
-        .mouse_x(mouse_x), .mouse_event(mouse_event),
+        .mouse_x_delta(mouse_x_delta), .mouse_event(mouse_event),
         .x_coord(player_x), .y_coord(player_y), .theta(player_angle)
     );
 

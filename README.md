@@ -102,7 +102,7 @@ The renderer snapshots all three state values once per scan.
 | BtnU | Move forward relative to the view |
 | BtnD | Move backward relative to the view |
 | BtnL / BtnR | Strafe left / right relative to the view |
-| Mouse horizontal movement | Turn right for increasing x, left for decreasing x |
+| Mouse horizontal movement | Move right to turn right, left to turn left; continuous wraparound |
 | Mouse left / middle / right button | Light LED 15 / 14 / 13 respectively |
 
 Buttons are active high, synchronized through two registers, and debounced for
@@ -122,35 +122,33 @@ commit position and angle together. The renderer
 snapshots the previous complete state while this update runs; it never sees a
 partially updated viewpoint. The shared `game_tick` comes from `Map_Renderer`.
 
-`My_Top_Module` instantiates the supplied VHDL entity `MouseCtl` from
-`Mouse_Control.vhd`, with its `Ps2Interface.vhd` dependency, on the 100 MHz board
-clock. These supplied drivers are unchanged. There is no `Top_Student.v` in
-this project. `value=0` and `setx`, `sety`, `setmax_x`, `setmax_y` are all tied
-low, retaining the default origin and bounds. On `new_event`, the controller
-records `spawn_angle + xpos` modulo 1024; one x count is 0.3515625 degrees.
-Multiple events between game ticks retain the latest orientation. Mouse outputs
-and game logic share one clock; the supplied PS/2 interface filters and samples
-the external lines. The XDC excepts asynchronous pad-input timing only.
+`My_Top_Module` instantiates the VHDL entity `Mouse_Control_Delta` from
+`Mouse_Control_Delta.vhd`, with its unchanged `Ps2Interface.vhd` dependency, on
+the 100 MHz board clock. The original `MouseCtl` in `Mouse_Control.vhd` remains
+in the repository but is no longer instantiated. There is no `Top_Student.v` in
+this project. Mouse outputs and game logic share one clock; the supplied PS/2
+interface filters and samples the external lines. The XDC excepts asynchronous
+pad-input timing only.
 
-**Default-driver limitation:** `xpos` saturates at 0 and 960. From startup,
-moving farther left cannot turn; moving right spans 337.5 degrees, and turning
-stops at either bound. There is no continuous mouse-look because configuration
-inputs are kept idle as requested. Continuous turning would require recentering
-the driver or exposing raw movement deltas. Y movement and the wheel
-do not affect the view. Mouse clicks are indicators only; combat is not added.
-
-`Mouse_Control_Delta.vhd` now provides a separate `Mouse_Control_Delta` entity
-for later continuous-turn integration. It outputs `x_delta`, a signed 9-bit
-horizontal count from -256 to +255 (right positive, left negative). Sample it
+`x_delta` is a signed 9-bit horizontal count from -256 to +255 (right positive,
+left negative). Sample it
 once on the 100 MHz clock when its one-cycle `new_event` pulse is high, including
 zero-delta/button-only packets. The value holds between events and clears on
 reset. X overflow saturates that packet's delta to -256 or +255 according to
 its sign. There are no accumulated positions or position-setting/limit inputs;
 Y and wheel bytes are consumed but ignored. Mouse button outputs and the PS/2
-ports remain. The existing top and player controller still use `MouseCtl` and
-retain the absolute-position limitation above until explicitly rewired. For a
-future Verilog connection, declare the delta wire `signed [8:0]` and sign-extend
-it before wider angle arithmetic.
+ports remain. Mouse clicks are indicators only; combat is not added.
+
+The top connects `x_delta` through a `signed [8:0]` wire to the controller's
+`mouse_x_delta` input. On each `mouse_event`, `Player_Controller` sign-extends
+the delta and adds it to its pending angle modulo 1024. One x count remains
+0.3515625 degrees. Turning wraps continuously in either direction, including
+left from startup, with no absolute-position clamp. Every packet is accumulated
+between game ticks and during movement updates; a held delta is not replayed
+without a new event. Each game tick snapshots the pending angle and commits it
+with position through the existing six-cycle pipeline. A packet arriving on the
+same clock as the tick, or during that pipeline, affects the following update.
+Reset restores the spawn angle and clears pending movement.
 
 Run `./tests/run_mouse_delta_checks.ps1` for the isolated byte-level controller
 simulation (optional `-VivadoBin` as below). It tests all 512 signed encodings in
@@ -214,7 +212,7 @@ sample the startup reset; the OLED driver itself is unchanged.
 
 ### Run the checks
 
-Add `Button_Debounce.v`, `Player_Controller.v`, `Mouse_Control.vhd`, and
+Add `Button_Debounce.v`, `Player_Controller.v`, `Mouse_Control_Delta.vhd`, and
 `Ps2Interface.vhd` alongside the existing renderer files to an already-open
 Vivado project, or regenerate the project. Use mixed-language simulation.
 Set the source include directory to
@@ -249,11 +247,14 @@ an explicit `PASS` from each simulation. Generated outputs stay under `build/`.
   real 24 Hz updates. It simulates 83.34 ms.
 - `player_controller_tb`: 16,384 numerical movement cases (all 1024 angles and
   16 button combinations), button bounce, opposing inputs, diagonal scaling,
-  mouse event retention/wrap, atomic updates, outer/interior walls, wall sliding,
-  bounds with an unenclosed map, and reset during each update stage.
+  all 512 signed mouse deltas, continuous turns in both directions, zero/held
+  deltas, event retention on every update stage, wrap, atomic updates,
+  outer/interior walls, wall sliding, bounds with an unenclosed map, and reset
+  during each update stage.
 - `mouse_top_tb`: actual mixed-language top elaboration, mouse click LEDs,
-  orientation wiring, and controlled renderer snapshot. Stimuli are injected at
-  the synchronous mouse output boundary; PS/2 packet exchange is not simulated.
+  signed delta accumulation, orientation wiring, and controlled renderer snapshot.
+  Stimuli are injected at the synchronous mouse output boundary; PS/2 packet
+  exchange is not simulated.
 - `oled_renderer_tb`: checks actual top-level OLED SPI pixel loads and colours,
   including pixel zero, with no input for the reference image.
   It also explicitly records a supplied-driver limitation:
@@ -277,21 +278,27 @@ checkpoint (the script refuses failing internal setup/hold timing):
 
 In Vivado Hardware Manager, open the connected Basys 3 target and program
 `build/renderer_hardware/My_Top_Module.bit`. Check each mouse-button LED,
-horizontal turning, view-relative movement, and collisions against both the
+continuous horizontal turning through several full turns in both directions,
+view-relative movement, and collisions against both the
 outside walls and the north block. Test simultaneous mouse turning/movement and
 long button holds. Reconfigure to restore the spawn; BtnC is not connected.
 
 ### Validation
 
-Vivado 2025.2 compiled and elaborated the mixed Verilog/VHDL design. All six
-simulations above reported `PASS`, including 16,384 movement reference cases.
+After delta integration, Vivado 2025.2 compiled and elaborated the mixed
+Verilog/VHDL design. `player_controller_tb`, `mouse_top_tb`, and the isolated
+`mouse_delta_tb` reported `PASS`, including 16,384 movement reference cases,
+all signed deltas, multi-turn wraparound, and packet retention during updates.
+The other four renderer regressions passed before this integration and were
+not rerun for this change.
 Synthesis and full placement/routing completed for `xc7a35tcpg236-1`. The final
-design uses 1,329 LUTs (6.39%), 875 flip-flops (2.10%), one RAMB18, and no DSPs.
-Routed setup slack is +0.566 ns and hold slack is +0.105 ns, with no failing
+design uses 1,304 LUTs (6.27%), 861 flip-flops (2.07%), one RAMB18, and no DSPs.
+Routed setup slack is +0.182 ns and hold slack is +0.065 ns, with no failing
 endpoints, no unconstrained internal endpoints, and no DRC violations.
-The bitstream was generated at `build/renderer_hardware/My_Top_Module.bit` and
-downloaded to the connected `xc7a35t` FPGA. Vivado reported startup status HIGH.
-This programs volatile configuration; no flash memory was written.
+No bitstream was generated or board programmed for the delta integration.
+Any existing `build/renderer_hardware/My_Top_Module.bit` may contain the earlier
+absolute-position design; regenerate it from the updated routed checkpoint
+using the command above before programming and checking continuous turning.
 Synthesis warnings include unused high state-port bits, the unused pixel-enable
 counter, constant output pins, and the existing OLED zero-width replication.
 

@@ -12,8 +12,8 @@ module Player_Controller #(
 ) (
     input wire clk, reset, game_tick,
     input wire btnU, btnL, btnR, btnD,
-    // MouseCtl outputs are synchronous to this same 100 MHz clock.
-    input wire [11:0] mouse_x,
+    // Mouse_Control_Delta outputs share this 100 MHz clock; valid on mouse_event.
+    input wire signed [8:0] mouse_x_delta,
     input wire mouse_event,
     output wire [31:0] x_coord, y_coord, theta
 );
@@ -27,12 +27,15 @@ module Player_Controller #(
     Button_Debounce #(.STABLE_CYCLES(DEBOUNCE_CYCLES)) right_button
         (.clk(clk), .reset(reset), .button(btnR), .pressed(right_down));
 
-    // Default mouse origin stays (0,0). One x count = one clockwise angle unit.
-    // MouseCtl clamps x to 0..960; no recentering or changes to supplied driver.
+    // One x count = one clockwise angle unit. Accumulate every packet once,
+    // including between ticks and during movement; truncation wraps modulo 1024.
+    // Sign-extend before addition so negative 9-bit deltas turn left correctly.
+    // An event coinciding with a tick is retained for the following update.
     reg [9:0] target_angle;
+    wire [9:0] mouse_angle_delta = {mouse_x_delta[8], mouse_x_delta};
     always @(posedge clk) begin
         if (reset) target_angle <= START_ANGLE[9:0];
-        else if (mouse_event) target_angle <= START_ANGLE[9:0] + mouse_x[9:0];
+        else if (mouse_event) target_angle <= target_angle + mouse_angle_delta;
     end
 
     `include "Ray_Tables.vh"

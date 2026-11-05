@@ -12,7 +12,7 @@ set source_dir [file join $root_dir FDP2026.srcs sources_1 new]
 foreach source {Clk_Divider.v Oled_Display.v Player.v Button_Debounce.v Player_Controller.v Ray_Caster.v Map_Renderer.v My_Top_Module.v} {
     read_verilog [list [file join $source_dir $source]]
 }
-foreach source {Ps2Interface.vhd Mouse_Control.vhd} {
+foreach source {Ps2Interface.vhd Mouse_Control_Delta.vhd} {
     read_vhdl [list [file join $source_dir $source]]
 }
 set_property include_dirs [list $source_dir] [current_fileset]

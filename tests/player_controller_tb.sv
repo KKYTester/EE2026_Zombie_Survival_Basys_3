@@ -5,34 +5,49 @@ module player_controller_tb;
     always #5 clk=~clk;
     reg reset=1, tick=0, event_in=0;
     reg [3:0] buttons=0; // U,D,L,R
-    reg [11:0] mouse_x=0;
+    reg signed [8:0] mouse_x_delta=0;
+    integer expected_target=0;
     wire [31:0] x,y,angle;
     Player_Controller #(.DEBOUNCE_CYCLES(3)) dut (
         .clk(clk), .reset(reset), .game_tick(tick),
         .btnU(buttons[3]), .btnD(buttons[2]), .btnL(buttons[1]), .btnR(buttons[0]),
-        .mouse_x(mouse_x), .mouse_event(event_in), .x_coord(x), .y_coord(y), .theta(angle)
+        .mouse_x_delta(mouse_x_delta), .mouse_event(event_in), .x_coord(x), .y_coord(y), .theta(angle)
     );
     // Open map tests bounds independently of enclosing walls.
     wire [31:0] open_x,open_y,open_angle;
     Player_Controller #(.DEBOUNCE_CYCLES(3), .MAP(256'd0)) open_map (
         .clk(clk), .reset(reset), .game_tick(tick),
         .btnU(buttons[3]), .btnD(buttons[2]), .btnL(buttons[1]), .btnR(buttons[0]),
-        .mouse_x(mouse_x), .mouse_event(event_in),
+        .mouse_x_delta(mouse_x_delta), .mouse_event(event_in),
         .x_coord(open_x), .y_coord(open_y), .theta(open_angle)
     );
     task cycle; begin @(posedge clk); #1; @(negedge clk); end endtask
     task restart;
         begin
-            reset=1; tick=0; event_in=0; buttons=0; mouse_x=0;
+            reset=1; tick=0; event_in=0; buttons=0; mouse_x_delta=0;
+            expected_target=`GAME_SPAWN_ANGLE;
             cycle; cycle;
             if (x!==`GAME_SPAWN_X || y!==`GAME_SPAWN_Y || angle!==`GAME_SPAWN_ANGLE)
                 $fatal(1,"Controller reset failed");
             reset=0; cycle;
         end
     endtask
-    task point_at(input integer a);
+    task send_delta(input integer delta);
         begin
-            mouse_x=(a-128)&1023; event_in=1; cycle; event_in=0; cycle;
+            mouse_x_delta=delta; event_in=1; cycle; event_in=0; cycle;
+            expected_target=(expected_target+delta+1024)%1024;
+            if (dut.target_angle!==expected_target || open_map.target_angle!==expected_target)
+                $fatal(1,"Mouse delta %0d: target=%0d expected=%0d",delta,dut.target_angle,expected_target);
+        end
+    endtask
+    task point_at(input integer a);
+        integer remaining;
+        begin
+            remaining=(a-expected_target+1024)%1024;
+            if(remaining>511) remaining=remaining-1024;
+            while(remaining>255) begin send_delta(255); remaining=remaining-255; end
+            while(remaining< -256) begin send_delta(-256); remaining=remaining+256; end
+            send_delta(remaining);
         end
     endtask
     task press(input [3:0] b);
@@ -109,25 +124,51 @@ module player_controller_tb;
         restart; point_at(768); press(8); repeat(300) update_player;
         if(x!==4608 || open_x!==512) $fatal(1,"West wall/bound failed");
 
-        // Latest of multiple events wins; left/right moves wrap 1023 -> 0.
-        restart; point_at(1023); point_at(0); update_player;
-        if(angle!==0) $fatal(1,"Lost mouse event/clockwise wrap");
-        point_at(1023); update_player;
-        if(angle!==1023) $fatal(1,"Counterclockwise wrap");
-        mouse_x=960; event_in=1; tick=1; cycle;
-        event_in=0; tick=0; repeat(5) cycle;
+        // All signed encodings accumulate, even with many events between ticks.
+        restart;
+        for(a=-256;a<=255;a=a+1) send_delta(a);
         update_player;
-        if(angle!==64) $fatal(1,"Simultaneous event and tick lost");
+        if(angle!==expected_target) $fatal(1,"Lost accumulated mouse movement");
+        // More than two full turns in each direction must never clamp.
+        repeat(12) send_delta(255);
+        update_player;
+        if(angle!==expected_target) $fatal(1,"Clockwise continuous turning clamped");
+        repeat(12) send_delta(-256);
+        update_player;
+        if(angle!==expected_target) $fatal(1,"Counterclockwise continuous turning clamped");
+        saved={x,y,angle};
+        repeat(3) update_player;
+        if({x,y,angle}!==saved) $fatal(1,"Held delta replayed without an event");
+        send_delta(0); update_player;
+        if({x,y,angle}!==saved) $fatal(1,"Zero delta changed state");
+
+        restart; point_at(1023); send_delta(1); update_player;
+        if(angle!==0) $fatal(1,"Lost mouse event/clockwise wrap");
+        send_delta(-1); update_player;
+        if(angle!==1023) $fatal(1,"Counterclockwise wrap");
+
+        // Packets on the tick or any busy stage survive to the next update.
+        for(n=0;n<6;n=n+1) begin
+            restart; tick=1;
+            if(n>0) begin cycle; tick=0; repeat(n-1) cycle; end
+            send_delta(-256); tick=0;
+            repeat(6) cycle;
+            if(angle!==128) $fatal(1,"Mouse packet changed in-flight snapshot at stage %0d",n);
+            update_player;
+            if(angle!==896) $fatal(1,"Mouse packet lost at stage %0d",n);
+            update_player;
+            if(angle!==896) $fatal(1,"Mouse packet repeated at stage %0d",n);
+        end
 
         // Every in-flight stage can be reset, even when a tick is asserted.
         for(n=0;n<6;n=n+1) begin
-            restart; press(8); tick=1; cycle; tick=0;
+            restart; send_delta(-200); press(8); tick=1; cycle; tick=0;
             repeat(n) cycle;
             reset=1; tick=1; cycle;
-            if(x!==34816 || y!==34816 || angle!==128 || dut.state!==0)
+            if(x!==34816 || y!==34816 || angle!==128 || dut.state!==0 || dut.target_angle!==128)
                 $fatal(1,"Reset during movement stage %0d",n);
         end
-        $display("PASS: 16384 movement references; debounce; opposing/diagonal controls; mouse wrap/events; wall sliding; map bounds; atomic commits; reset");
+        $display("PASS: 16384 movement references; debounce; opposing/diagonal controls; all 512 mouse deltas; continuous turning; wrap; event/tick/busy retention; wall sliding; map bounds; atomic commits; reset");
         $finish;
     end
     initial begin #10000000; $fatal(1,"Controller timeout"); end
