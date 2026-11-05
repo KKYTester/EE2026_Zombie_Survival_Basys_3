@@ -3,9 +3,11 @@
 module Player #(
     parameter [31:0] START_X = 32'd0,
     parameter [31:0] START_Y = 32'd0,
-    parameter [31:0] START_ANGLE = 32'd0
+    parameter [31:0] START_ANGLE = 32'd0,
+    parameter USE_RUNTIME_SPAWN = 0
 ) (
     input wire reset,
+    input wire [31:0] spawn_x, spawn_y,
     input wire clk, // system clock
     input wire game_tick, // one system-clock cycle per game update (24 Hz)
     input wire [31:0] dx, // x increment per tick, 12 fractional bits
@@ -21,8 +23,8 @@ module Player #(
     wire [9:0] next_angle = theta[9:0] + omega[9:0];
     always @(posedge clk) begin
         if (reset) begin
-            x_coord <= START_X;
-            y_coord <= START_Y;
+            x_coord <= USE_RUNTIME_SPAWN ? spawn_x : START_X;
+            y_coord <= USE_RUNTIME_SPAWN ? spawn_y : START_Y;
             theta <= {22'd0, START_ANGLE[9:0]};
         end
         else if (game_tick) begin

@@ -8,9 +8,12 @@ module Player_Controller #(
     parameter integer DEBOUNCE_CYCLES = `GAME_BUTTON_DEBOUNCE_CYCLES,
     parameter [31:0] START_X = `GAME_SPAWN_X,
     parameter [31:0] START_Y = `GAME_SPAWN_Y,
-    parameter [31:0] START_ANGLE = `GAME_SPAWN_ANGLE
+    parameter [31:0] START_ANGLE = `GAME_SPAWN_ANGLE,
+    parameter USE_RUNTIME_MAP = 0
 ) (
     input wire clk, reset, game_tick,
+    input wire [255:0] map_bits,
+    input wire [31:0] spawn_x, spawn_y,
     input wire btnU, btnL, btnR, btnD,
     // Mouse_Control_Delta outputs share this 100 MHz clock; valid on mouse_event.
     input wire signed [8:0] mouse_x_delta,
@@ -73,12 +76,13 @@ module Player_Controller #(
     // A square 1/4-cell-wide body. Four corner checks suffice because both
     // body width and maximum per-axis step are less than one map cell.
     // Out-of-map coordinates are solid, before any variable map-bit access.
+    wire [255:0] active_map = USE_RUNTIME_MAP ? map_bits : MAP;
     function cell_open;
         input signed [17:0] x, y;
         begin
             if (x < 0 || y < 0 || x >= 18'sd65536 || y >= 18'sd65536)
                 cell_open = 0;
-            else cell_open = !MAP[{y[15:12],x[15:12]}];
+            else cell_open = !active_map[{y[15:12],x[15:12]}];
         end
     endfunction
     function body_open;
@@ -97,8 +101,10 @@ module Player_Controller #(
     reg [31:0] dx, dy;
     reg [9:0] update_angle;
     wire [9:0] angle_delta = update_angle - theta[9:0];
-    Player #(.START_X(START_X), .START_Y(START_Y), .START_ANGLE(START_ANGLE)) player (
+    Player #(.START_X(START_X), .START_Y(START_Y), .START_ANGLE(START_ANGLE),
+        .USE_RUNTIME_SPAWN(USE_RUNTIME_MAP)) player (
         .clk(clk), .reset(reset), .game_tick(state == COMMIT),
+        .spawn_x(spawn_x), .spawn_y(spawn_y),
         .dx(dx), .dy(dy), .omega({22'd0,angle_delta}),
         .x_coord(x_coord), .y_coord(y_coord), .theta(theta)
     );

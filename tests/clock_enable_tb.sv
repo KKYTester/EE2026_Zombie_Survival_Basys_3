@@ -11,7 +11,7 @@ module clock_enable_tb;
     wire [15:0] pixels, single_cycle_pixels, default_pixels;
     wire [7:0] jb;
     tri1 ps2_clk, ps2_data;
-    My_Top_Module board (.clk(clk), .JB(jb), .btnU(1'b0), .btnL(1'b0),
+    My_Top_Module board (.clk(clk), .JB(jb), .btnC(1'b0), .sw0(1'b0), .sw13(1'b0), .sw14(1'b0), .sw15(1'b0), .btnU(1'b0), .btnL(1'b0),
         .btnR(1'b0), .btnD(1'b0), .ps2_clk(ps2_clk), .ps2_data(ps2_data), .led());
 
     Player player (
@@ -44,7 +44,7 @@ module clock_enable_tb;
         for (startup_cycle = 1; startup_cycle <= 256; startup_cycle = startup_cycle + 1) begin
             @(posedge clk);
             #1;
-            if (board.reset !== (startup_cycle < 255))
+            if (board.reset !== (startup_cycle < 2))
                 $fatal(1, "Top-level startup reset failed at cycle %0d", startup_cycle);
         end
     end
@@ -110,8 +110,8 @@ module clock_enable_tb;
             if (defaults.pixel_tick !== ((cycle % 4) == 0))
                 $fatal(1, "Default pixel timing failed at cycle %0d", cycle);
             step;
-            if (board.player_angle !== `GAME_SPAWN_ANGLE ||
-                board.player_x !== `GAME_SPAWN_X || board.player_y !== `GAME_SPAWN_Y)
+            if (board.map_valid_delayed && (board.player_angle !== `GAME_SPAWN_ANGLE ||
+                board.player_x !== board.spawn_x || board.player_y !== board.spawn_y))
                 $fatal(1, "Player moved without input at cycle %0d", cycle);
             @(negedge clk);
         end

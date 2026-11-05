@@ -72,12 +72,51 @@ recursively, and the hardware validation script uses the grouped paths.
 See [DeveloperGuide.md](DeveloperGuide.md) for prototype details, controls,
 rendering, and validation instructions.
 
-## Member 4: map and game subsystem
+## Integrated random-map game demo
 
-This branch includes a standalone map/game/UI demo for the Basys 3 and a
-`game_core` wrapper for team integration. The demo uses a flat sky/floor world
-view, a stationary player spawn tile and a temporary zombie stub. Raycasting,
-player movement, real enemy AI/combat and multiplayer still need connecting.
+`My_Top_Module` now combines the map/game/UI demo with the raycaster and player
+controller. Starting with btnC or clicking the enabled 1-player title option
+generates a validated random map and shows its 3D walls behind the existing
+weapon and HUD. The original `map_preview_top` remains a standalone flat-world
+demo. Enemy AI and combat targeting still use the original temporary stub.
+
+### Run the integrated game
+
+Use the default top `My_Top_Module` and `Basys3_Master.xdc`; no alternate pin file
+is needed. Regenerate the project or add all new design sources recursively to
+an existing project. The project script sets the source-root include directory
+for `Game_Config.vh` and `Ray_Tables.vh`. The OLED stays on JB and `game_core`
+owns the only OLED driver and the final-pixel bridge.
+
+| Control | Action |
+|---|---|
+| Mouse + left-click on 1 PLAYER, or btnC | Start from the title |
+| btnU / btnD | Move forward / backward relative to the view |
+| btnL / btnR | Strafe left / right |
+| Mouse horizontal movement during play | Turn continuously, one count per 1/1024 turn |
+| Left-click or btnC during play | Fire the demo pistol |
+| Right-click during play | Reload |
+| SW0 | Toggle the full map overlay; player marker follows movement |
+| SW13 / SW14, each flip | Test damage / defeat one stub zombie |
+| SW15 up, then down | Reset to title |
+| Seven-segment display | Active map seed |
+
+The 2-player option stays disabled. Menus, generating screen, hearts, ten waves,
+weapon animation/ammo/reload, damage effects, victory/game-over screens and
+return-to-title behavior are retained from the demo. Firing emits the existing
+`shot_fired` event; it does not yet target enemies. Zombies are still map dots,
+without first-person sprites, navigation or attacks.
+
+The generated map and UI use `{y,x}`, x right and y down, 1 wall / 0 floor.
+The integration reverses rows for the existing north-increasing renderer/player
+coordinates and converts the validated P1 spawn to the center of its tile in
+Q*.12. Movement and rays share that converted map. Each new game resets the
+view to angle 128 (northeast). Each scan snapshots map and pose; completed
+column banks publish only during `game_core.frame_idle`. The renderer reads
+the core's look-ahead X/Y directly, including pixel (95,63), without putting a
+row-index division on the integrated pixel path.
+
+### Original map/game subsystem
 
 ### Current behaviour
 
@@ -152,7 +191,7 @@ for team work. For this standalone demo:
 On either end screen, a new left-click or btnC returns to the title after the
 input delay. The two-player option is disabled in the current demo. Shooting
 provides a `shot_fired` event; actual targeting and enemy damage belong to the
-combat integration. The minimap player markers currently show spawn locations.
+combat integration. The standalone minimap markers show spawn locations; the integrated P1 marker follows movement.
 
 ### Integration contract
 
@@ -167,7 +206,8 @@ real player/enemy modules to its ports:
 | `play_start`, `game_state` | New-game initialisation pulse; state 3 means playing |
 | `player_tile` | Connect the player's current tile so spawn-distance checks follow movement |
 | `pixel_x`, `pixel_y`, `world_pixel` | The core requests a world pixel ahead of transmission; the renderer supplies RGB565 colour before its sample deadline, including the final pixel |
-| `frame_begin` | One 100 MHz-clock pulse per display frame; prepare the renderer's first pixel before it is sampled |
+| `frame_begin` | One 100 MHz-clock pulse per display frame |
+| `frame_idle` | Safe window for the integrated renderer to publish a completed column bank before the next frame |
 | `spawn_req`, `spawn_tile`, `spawn_ack` | Request and tile stay asserted/stable until the enemy module acknowledges acceptance |
 | `occupied`, `enemy_defeated` | Enemy tile mask and one defeat pulse per killed enemy |
 | `player_hit`, `shot_fired` | One-clock combat events; health is maintained by `game_core` |
@@ -184,9 +224,18 @@ Tests and detailed verification records are maintained in the separate local
 source-only layout. Keep the working `ui/weapon_overlay.v` and sprite artwork;
 the obsolete script does not regenerate the current reload-capable overlay.
 
-The latest standalone regression passed all 16 simulation targets, including
+The feature branch reports that its standalone regression passed all 16 simulation targets, including
 five complete 6144-pixel OLED frames. Those checks cover the map, display,
 controls, menus, spawning, wave progression, weapon/reload behaviour and
 victory/restart. The latest RTL refactors still require fresh synthesis,
 implementation, timing/resource checks and board verification; existing
 bitstreams predate them.
+
+### Integration validation
+
+Run `./tests/run_mouse_delta_checks.ps1` and `./tests/run_renderer_checks.ps1`
+for packet, pointer, ray, player, runtime-map, integrated-flow and complete OLED
+stream checks. Add `-Hardware` to the renderer runner for synthesis, placement,
+routing, utilization, timing and CDC reports under `build/renderer_hardware/`.
+No board verification is implied by these simulations. See DeveloperGuide.md
+for the current integration results and remaining hardware checks.

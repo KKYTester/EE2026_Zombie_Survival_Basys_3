@@ -6,13 +6,18 @@ module Map_Renderer #(
     parameter integer GAME_HZ = 24,
     // Kept for the existing timing interface; ray work runs at full clk speed.
     parameter integer PIXEL_UPDATE_HZ = 25_000_000,
-    parameter [255:0] MAP = `GAME_MAP
+    parameter [255:0] MAP = `GAME_MAP,
+    parameter USE_RUNTIME_MAP = 0,
+    parameter USE_PIXEL_COORDS = 0
 ) (
     input wire clk, reset,
+    input wire [255:0] map_bits,
     input wire [31:0] x_coord, y_coord, theta,
     output wire game_tick,
     input wire display_clk, frame_begin,
     input wire [12:0] pixel_index,
+    input wire [6:0] pixel_x,
+    input wire [5:0] pixel_y,
     output reg [15:0] pixel_data,
     output wire [9:0] column_depth // perpendicular depth, in 1/32-cell units
 );
@@ -89,6 +94,7 @@ module Map_Renderer #(
     reg [6:0] column;
     reg signed [17:0] frame_x, frame_y;
     reg [9:0] frame_angle;
+    reg [255:0] frame_map;
     wire [9:0] ray_angle = frame_angle + column_offset(column);
     wire ray_done, ray_hit, ray_busy;
     wire [6:0] ray_height;
@@ -97,8 +103,9 @@ module Map_Renderer #(
     wire [6:0] ray_bottom = ray_top + ray_height;
     wire ray_start = state == LAUNCH;
     wire [7:0] write_index = (write_bank ? 8'd96 : 8'd0) + {1'b0,column};
-    Ray_Caster #(.MAP(MAP)) raycaster (
+    Ray_Caster #(.MAP(MAP), .USE_RUNTIME_MAP(USE_RUNTIME_MAP)) raycaster (
         .clk(clk), .reset(reset), .start(ray_start),
+        .map_bits(frame_map),
         .player_x(frame_x), .player_y(frame_y), .angle(ray_angle),
         .projection_cosine(column_cosine(column)),
         .busy(ray_busy), .done(ray_done), .hit(ray_hit),
@@ -111,6 +118,7 @@ module Map_Renderer #(
             frame_x <= 0;
             frame_y <= 0;
             frame_angle <= 0;
+            frame_map <= 0;
             write_bank <= 1;
             request_toggle <= 0;
         end else begin
@@ -119,6 +127,7 @@ module Map_Renderer #(
                     frame_x <= $signed(x_coord[17:0]);
                     frame_y <= $signed(y_coord[17:0]);
                     frame_angle <= theta[9:0];
+                    frame_map <= map_bits;
                     column <= 0;
                     state <= LAUNCH;
                 end
@@ -150,10 +159,10 @@ module Map_Renderer #(
 
     // Continuous colour is stable before Oled_Display's falling-edge capture.
     // No system-clock sampling of pixel_index; it belongs to the OLED domain.
-    wire [12:0] pixel_x_full = pixel_index % 13'd96;
-    wire [12:0] pixel_y_full = pixel_index / 13'd96;
+    wire [12:0] pixel_x_full = USE_PIXEL_COORDS ? {6'd0,pixel_x} : pixel_index % 13'd96;
+    wire [12:0] pixel_y_full = USE_PIXEL_COORDS ? {7'd0,pixel_y} : pixel_index / 13'd96;
     wire [7:0] read_index = (front_bank ? 8'd96 : 8'd0) + {1'b0,pixel_x_full[6:0]};
-    wire valid_pixel = pixel_index < 13'd6144;
+    wire valid_pixel = USE_PIXEL_COORDS ? pixel_x < 7'd96 : pixel_index < 13'd6144;
     // Cache projection bounds with the shade so pixel lookup only compares.
     wire [6:0] wall_top = {1'b0, wall_tops[read_index]};
     wire [6:0] wall_bottom = wall_bottoms[read_index];

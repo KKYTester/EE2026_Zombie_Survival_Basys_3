@@ -1,6 +1,73 @@
 # Developer Guide
 
-## First-person movement prototype
+## Random-map integration
+
+The current top is the integrated demo described in README.md. The fixed-map
+prototype below documents the renderer's retained defaults and original
+validation; its old top-level controls and resource figures are historical.
+The integrated top uses SW15 reset, game_core's OLED clock/output, runtime map
+and spawn inputs, and the demo UI. Mouse buttons now fire/reload rather than
+lighting LEDs. Existing parameter-map behavior remains available for isolated
+renderer/player regressions.
+
+`USE_RUNTIME_MAP=1` selects a map input in Player_Controller and Map_Renderer.
+The renderer snapshots all 256 map bits with the pose once per scan, so every
+ray sees the same map. Ray_Caster's map input must stay stable until done; the
+renderer enforces this with frame_map. Player's runtime spawn is loaded while
+reset is asserted. The top keeps the controller reset outside play, and waits
+one extra clock after map publication before releasing the renderer so it sees
+the new spawn. Each scan costs at most 74,496 clocks; the double column banks
+still need 5,376 bits, plus the 256-bit scan map snapshot. Collision and rays
+share one row-reversed published map; no framebuffer is introduced.
+
+`USE_PIXEL_COORDS=1` selects direct 7-bit X / 6-bit Y world-pixel requests.
+Both renderer handshake sides run on the 100 MHz board clock in the integrated
+top. frame_idle permits bank swaps only before transmission; the 6.25 MHz
+OLED driver and compositor retain their related, constrained clock. The XDC
+uses divider edges 15/31/47 for the initialized free-running counter, and keeps
+asynchronous board inputs exempt from pad timing. It does not exempt internal
+paths between the board and OLED clocks.
+
+New checks cover 2D cursor clamp/reset, runtime map changes and scan snapshots,
+spawn/collision/bounds, mouse and btnC session starts, the disabled 2P option,
+fire/reload, damage, victory, return to title, and random-map restart. The OLED
+check decodes JB serial bits for complete 6,144-pixel frames and compares the
+world against a numerical ray reference, with existing weapon/HUD and minimap
+composition. The course driver remains unchanged; the demo's tail bridge
+supplies its missing last pixel.
+
+Integration validation (5 November 2026, Vivado 2025.2): all eight renderer-runner
+targets and the isolated mouse packet target reported PASS. This includes 1,800
+numerical rays, 16,384 movement cases, all signed X/Y packet encodings, runtime
+map/spawn/collision checks, accelerated session/end-screen/restart flows, and
+two complete 6,144-pixel serial OLED frames. The final direct-X/Y pixel path
+was rerun through the mixed-language flow and serial OLED checks. OLED power-up
+delays were skipped in that stream test; pixel, SPI and frame timing stayed real.
+Mouse integration stimuli are at the synchronous packet-output boundary.
+
+Synthesis, placement and routing passed for xc7a35tcpg236-1. The final routed
+design uses 7,806 LUTs (37.53%), 6,072 registers (14.60%), two RAMB18s and one
+DSP. Setup slack is +0.357 ns; hold slack is +0.062 ns, with zero failing and
+zero unconstrained internal endpoints. Reports/checkpoint are under
+build/renderer_hardware/. The hardware run needed execution outside the Codex
+sandbox because Vivado file discovery resolved the workspace path incorrectly
+inside it. No bitstream was generated and no board was programmed.
+
+Warnings reviewed: DRC has three DSP pipeline recommendations (DPIP-1, DPOP-1,
+DPOP-2), no errors. CDC recognizes 1,378 board-to-OLED and 17 OLED-to-board
+endpoints as safely timed, and nine board-input synchronizers. The supplied
+PS/2 filter still has 12 unknown/critical input CDC endpoints, as in the original
+prototype. Synthesis logs an early generated-clock pin-resolution warning;
+the final timing report includes the connected 160 ns OLED clock with the
+70 ns phase and zero generated-clock errors. Other synthesis warnings concern
+unused/trimmed fields, constant pins and the supplied OLED replication. Timing
+also reports 21 ports without external output delays (mostly indicators,
+power/control and PS/2), plus one clock output; this is not external-interface
+signoff. Physical mouse signaling, OLED appearance, controls and gameplay still
+need board checks. Enemy AI, 3D sprites and actual combat targeting remain stubs.
+
+
+## Original first-person movement prototype
 
 The OLED now displays a first-person view of the fixed, enclosed 16 by 16 room:
 grey walls, a dark ceiling, and a dark floor. The player starts at `(8.5, 8.5)`,
@@ -231,17 +298,16 @@ an explicit `PASS` from each simulation. Generated outputs stay under `build/`.
   deltas, event retention on every update stage, wrap, atomic updates,
   outer/interior walls, wall sliding, bounds with an unenclosed map, and reset
   during each update stage.
-- `mouse_top_tb`: actual mixed-language top elaboration, mouse click LEDs,
-  signed delta accumulation, orientation wiring, and controlled renderer snapshot.
+- `mouse_top_tb`: actual mixed-language integrated top, mouse/btnC session starts,
+  signed turns, spawn/map alignment, fire/reload, game over, victory and restart.
   Stimuli are injected at the synchronous mouse output boundary; PS/2 packet
   exchange is not simulated.
-- `oled_renderer_tb`: checks actual top-level OLED SPI pixel loads and colours,
-  including pixel zero, with no input for the reference image.
-  It also explicitly records a supplied-driver limitation:
-  `Oled_Display.v` exits `SendPixel` when `pixel_index` reaches 6143, so it sends
-  indices 0 through 6142 and skips the bottom-right pixel. All 6,144 renderer
-  pixels are tested separately. The driver is labelled `DO NOT MODIFY` and has
-  been left unchanged; the final physical pixel is not guaranteed by this prototype.
+- `oled_renderer_tb`: decodes two complete 6,144-pixel OLED frames on JB,
+  comparing the generated world against numerical ray references and exercising
+  weapon/HUD composition, map overlay and the inserted final pixel.
+- `runtime_map_tb`: stable per-scan map snapshots, new-map publication, dynamic
+  spawn loading, collision against a changing map and enclosing boundaries.
+- `mouse_pointer_tb`: signed 2D cursor movement, screen clamps and reset.
 
 `-Hardware` writes utilization, setup/hold timing, DRC, and CDC reports plus a
 routed checkpoint to `build/renderer_hardware/`. Inspect these reports before

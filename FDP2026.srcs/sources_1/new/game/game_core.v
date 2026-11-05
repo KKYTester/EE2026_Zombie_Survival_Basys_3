@@ -30,7 +30,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     output wire [7:0] oled_jb,                    // Pmod OLEDrgb on JB
     output wire [6:0] seg, output wire dp, output wire [3:0] an,
     output wire [15:0] led,
-    // Mouse (from Member 1's MouseCtl; pointer clamped to the screen)
+    // Mouse (from delta-packet pointer accumulator; clamped to the screen)
     input wire [6:0] mouse_x, input wire [5:0] mouse_y,
     input wire mouse_left, input wire mouse_right, input wire mouse_event,
     // Map
@@ -218,7 +218,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
             frame_cx<=48; frame_cy<=40; frame_progress<=0;
             frame_tint<=0; frame_blink<=0; frame_over_ready<=0;
         end else if(oled_frame_begin) begin
-            frame_map<=published_map; frame_p1<=p1_addr; frame_p2<=p2_addr;
+            frame_map<=published_map; frame_p1<=playing_now ? player_tile : p1_addr; frame_p2<=p2_addr;
             frame_health<=health; frame_wave<=wave;
             frame_remaining<=remaining; frame_zombies<=zombies;
             frame_flash<=weapon_flash; frame_recoil<=weapon_recoil;

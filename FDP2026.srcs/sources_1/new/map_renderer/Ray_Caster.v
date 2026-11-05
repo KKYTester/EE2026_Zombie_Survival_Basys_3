@@ -5,9 +5,11 @@
 // Raw distance and perpendicular camera depth are in 1/32-cell steps.
 module Ray_Caster #(
     parameter [255:0] MAP = `GAME_MAP,
-    parameter [9:0] MAX_STEPS = 10'd768
+    parameter [9:0] MAX_STEPS = 10'd768,
+    parameter USE_RUNTIME_MAP = 0
 ) (
     input wire clk, reset, start,
+    input wire [255:0] map_bits, // hold stable from start through done
     input wire signed [17:0] player_x, player_y, // signed, 12 fractional bits
     input wire [9:0] angle,
     // round(4096*cos(ray_angle-view_angle)), unsigned Q1.12, 0..4096.
@@ -32,7 +34,8 @@ module Ray_Caster #(
     wire [9:0] cosine_angle = saved_angle + 10'd256;
     wire in_bounds = ray_x >= 18'sd0 && ray_x < 18'sd65536 &&
                      ray_y >= 18'sd0 && ray_y < 18'sd65536;
-    wire wall = in_bounds ? MAP[{ray_y[15:12], ray_x[15:12]}] : 1'b0;
+    wire [255:0] active_map = USE_RUNTIME_MAP ? map_bits : MAP;
+    wire wall = in_bounds ? active_map[{ray_y[15:12], ray_x[15:12]}] : 1'b0;
     assign busy = state != IDLE;
 
     // All division here is evaluated once at elaboration, producing a ROM.

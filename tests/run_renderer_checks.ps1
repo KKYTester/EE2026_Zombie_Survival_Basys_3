@@ -1,11 +1,12 @@
 param(
     [string]$VivadoBin = 'C:/AMDDesignTools/2025.2/Vivado/bin',
     [switch]$Hardware,
-    [string[]]$Tests = @('ray_caster_tb', 'map_renderer_tb', 'clock_enable_tb', 'player_controller_tb', 'mouse_top_tb', 'oled_renderer_tb')
+    [string[]]$Tests = @('ray_caster_tb', 'map_renderer_tb', 'clock_enable_tb', 'player_controller_tb', 'mouse_top_tb', 'oled_renderer_tb', 'mouse_pointer_tb', 'runtime_map_tb')
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $outputDir = Join-Path $repoRoot 'build/renderer_checks'
+New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 $sourceDir = Join-Path $repoRoot 'FDP2026.srcs/sources_1/new'
 & python (Join-Path $PSScriptRoot 'generate_ray_vectors.py')
 if ($LASTEXITCODE -ne 0) { throw 'Reference generation failed' }

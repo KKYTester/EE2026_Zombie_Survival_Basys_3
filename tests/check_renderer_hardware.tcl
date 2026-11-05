@@ -8,13 +8,16 @@ if {$argc > 0} {
 set out_dir [file join $root_dir build renderer_hardware]
 file mkdir $out_dir
 cd $out_dir
+set_param general.maxThreads 8
 set source_dir [file join $root_dir FDP2026.srcs sources_1 new]
-foreach source {Clk_Divider.v Oled_Display.v player_state/Player.v Button_Debounce.v player_state/Player_Controller.v map_renderer/Ray_Caster.v map_renderer/Map_Renderer.v My_Top_Module.v} {
-    read_verilog [list [file join $source_dir $source]]
+proc read_design_tree {directory} {
+    foreach source [lsort [glob -nocomplain -directory $directory *]] {
+        if {[file isdirectory $source]} { read_design_tree $source
+        } elseif {[file extension $source] eq ".v"} { read_verilog [list $source]
+        } elseif {[file extension $source] eq ".vhd"} { read_vhdl [list $source] }
+    }
 }
-foreach source {Ps2Interface.vhd Mouse_Control_Delta.vhd} {
-    read_vhdl [list [file join $source_dir $source]]
-}
+read_design_tree $source_dir
 set_property include_dirs [list $source_dir] [current_fileset]
 read_xdc [list [file join $root_dir FDP2026.srcs constrs_1 new Basys3_Master.xdc]]
 synth_design -top My_Top_Module -part xc7a35tcpg236-1
