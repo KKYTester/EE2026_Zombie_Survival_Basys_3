@@ -1,184 +1,30 @@
--- DO NOT MODIFY THIS MODULE
-
 ------------------------------------------------------------------------
--- Mouse_Control.vhd
-------------------------------------------------------------------------
--- Author : Ulrich Zolt?n
---          Copyright 2006 Digilent, Inc.
-------------------------------------------------------------------------
--- This file contains a controller for a ps/2 compatible mouse device.
--- This controller uses the ps2interface module.
-------------------------------------------------------------------------
---  Behavioral description
-------------------------------------------------------------------------
--- Please read the following article on the web for understanding how
--- to interface a ps/2 mouse:
--- http://www.computer-engineering.org/ps2mouse/
-
--- This controller is implemented as described in the above article.
--- The mouse controller receives bytes from the ps2interface which, in
--- turn, receives them from the mouse device. Data is received on the
--- rx_data input port, and is validated by the read signal. read is
--- active for one clock period when new byte available on rx_data. Data
--- is sent to the ps2interface on the tx_data output port and validated
--- by the write output signal. 'write' should be active for one clock
--- period when tx_data contains the command or data to be sent to the
--- mouse. ps2interface wraps the byte in a 11 bits packet that is sent
--- through the ps/2 port using the ps/2 protocol. Similarly, when the
--- mouse sends data, the ps2interface receives 11 bits for every byte,
--- extracts the byte from the ps/2 frame, puts it on rx_data and
--- activates read for one clock period. If an error occurs when sending
--- or receiving a frame from the mouse, the err input goes high for one
--- clock period. When this occurs, the controller enters reset state.
-
--- When in reset state, the controller resets the mouse and begins an
--- initialization procedure that consists of tring to put mouse in
--- scroll mode (enables wheel if the mouse has one), setting the
--- resolution of the mouse, the sample rate and finally enables
--- reporting. Implicitly the mouse, after a reset or imediately after a
--- reset, does not send data packets on its own. When reset(or power-up)
--- the mouse enters reset state, where it performs a test, called the
--- bat test (basic assurance test), when this test is done, it sends
--- the result: AAh for test ok, FCh for error. After this it sends its
--- ID which is 00h. When this is done, the mouse enters stream mode,
--- but with reporting disabled (movement data packets are not sent).
--- To enable reporting the enable data reporting command (F4h) must be
--- sent to the mouse. After this command is sent, the mouse will send
--- movement data packets when the mouse is moved or the status of the
--- button changes.
-
--- After sending a command or a byte following a command, the mouse
--- must respond with ack (FAh). For managing the intialization
--- procedure and receiving the movement data packets, a FSM is used.
--- When the fpga is powered up or the logic is reset using the global
--- reset, the FSM enters reset state. From this state, the FSM will
--- transition to a series of states used to initialize the mouse. When
--- initialization is complete, the FSM remains in state read_byte_1,
--- waiting for a movement data packet to be sent. This is the idle
--- state if the FSM. When a byte is received in this state, this is
--- the first byte of the 3 bytes sent in a movement data packet (4 bytes
--- if mouse in scrolling mode). After reading the last byte from the
--- packet, the FSM enters mark_new_event state and sets new_event high.
--- After that FSM enterss read_byte_1 state, resets new_event and waits
--- for a new packet.
--- After a packet is received, new_event is set high for one clock
--- period to "inform" the clients of this controller a new packet was
--- received and processed.
-
--- During the initialization procedure, the controller tries to put the
--- mouse in scroll mode (activates wheel, if mouse has one). This is
--- done by successively setting the sample rate to 200, then to 100, and
--- lastly to 80. After this is done, the mouse ID is requested by 
--- sending get device ID command (F2h). If the received ID is 00h than
--- the mouse does not have a wheel. If the received ID is 03h than the
--- mouse is in scroll mode, and when sending movement data packets
--- (after enabling data reporting) it will include z movement data.
--- If the mouse is in normal, non-scroll mode, the movement data packet
--- consists of 3 successive bytes. This is their format:
+-- Mouse_Control_Delta.vhd
+-- Adapted from Mouse_Control.vhd by Ulrich Zoltan, Copyright 2006 Digilent, Inc.
+-- Uses the unchanged Ps2Interface for mouse initialization and byte transfers.
 --
+-- x_delta: signed 9-bit horizontal movement (-256 to +255 counts), formed
+-- from packet byte 1 XSIGN and the full byte 2. Right is positive, left is
+-- negative. X overflow saturates to +255 or -256 according to XSIGN.
+-- No absolute positions, position limits, or position-setting inputs remain.
+-- Y and wheel bytes are consumed for packet framing; their movement is ignored.
 --
---
--- bits      7     6     5     4     3     2     1     0
---        -------------------------------------------------
--- byte 1 | YOVF| XOVF|YSIGN|XSIGN|  1  | MBTN| RBTN| LBTN|
---        -------------------------------------------------
---        -------------------------------------------------
--- byte 2 |                  X MOVEMENT                   |
---        -------------------------------------------------
---        -------------------------------------------------
--- byte 3 |                  Y MOVEMENT                   |
---        -------------------------------------------------
--- OVF = overflow
--- BTN = button
--- M = middle
--- R = right
--- L = left
---
--- When scroll mode is enabled, the mouse send 4 byte movement packets.
--- bits      7     6     5     4     3     2     1     0
---        -------------------------------------------------
--- byte 1 | YOVF| XOVF|YSIGN|XSIGN|  1  | MBTN| RBTN| LBTN|
---        -------------------------------------------------
---        -------------------------------------------------
--- byte 2 |                  X MOVEMENT                   |
---        -------------------------------------------------
---        -------------------------------------------------
--- byte 3 |                  Y MOVEMENT                   |
---        -------------------------------------------------
---        -------------------------------------------------
--- byte 4 |                  Z MOVEMENT                   |
---        -------------------------------------------------
--- x and y movement counters are represented on 8 bits, 2's complement
--- encoding. The first bit (sign bit) of the counters are the xsign and
--- ysign bit from the first packet, the rest of the bits are the second
--- byte for the x movement and the third byte for y movement. For the
--- z movement the range is -8 -> +7 and only the 4 least significant
--- bits from z movement are valid, the rest are sign extensions.
--- The x and y movements are in range: -256 -> +255
-
--- The mouse uses as axes origin the lower-left corner. For the purpose
--- of displaying a mouse cursor on the screen, the controller inverts
--- the y axis to move the axes origin in the upper-left corner. This
--- is done by negating the y movement value (following the 2s complement
--- encoding). The movement data received from the mouse are delta
--- movements, the data represents the movement of the mouse relative
--- to the last position. The controller keeps track of the position of
--- the mouse relative to the upper-left corner. This is done by keeping
--- the mouse position in two registers x_pos and y_pos and adding the
--- delta movements to their value. The addition uses saturation. That
--- means the value of the mouse position will not exceed certain bounds
--- and will not rollover the a margin. For example, if the mouse is at
--- the left margin and is moved left, the x position remains at the left
--- margin(0). The lower bound is always 0 for both x and y movement.
--- The upper margin can be set using input pins: value, setmax_x,
--- setmax_y. To set the upper bound of the x movement counter, the new
--- value is placed on the value input pins and setmax_x is activated
--- for at least one clock period. Similarly for y movement counter, but
--- setmax_y is activated instead. Notice that value has 10 bits, and so
--- the maximum value for a bound is 1023.
-
--- The position of the mouse (x_pos and y_pos) can be set at any time,
--- by placing the x or y position on the value input pins and activating
--- the setx, or sety respectively, for at least one clock period. This
--- is useful for setting an original position of the mouse different
--- from (0,0).
-------------------------------------------------------------------------
---  Port definitions
-------------------------------------------------------------------------
--- clk            - global clock signal (100MHz)
--- rst            - global reset signal
--- xpos           - output pin, 10 bits
---                - the x position of the mouse relative to the upper
---                - left corner
--- ypos           - output pin, 10 bits
---                - the y position of the mouse relative to the upper
---                - left corner
--- zpos           - output pin, 4 bits
---                - last delta movement on z axis
--- left           - output pin, high if the left mouse button is pressed
--- middle         - output pin, high if the middle mouse button is
---                - pressed
--- right          - output pin, high if the right mouse button is
---                - pressed
--- new_event      - output pin, active one clock period after receiving
---                - and processing one movement data packet.
-------------------------------------------------------------------------
--- Revision History:
--- 09/18/2006(UlrichZ): created
+-- new_event: one-clk valid pulse per complete packet, including zero movement
+-- and button-only packets. Sample x_delta ONCE when new_event is high, on clk.
+-- x_delta holds the last completed value until the next event or reset.
+-- rst: active high; clears x_delta/new_event and reinitializes the mouse.
+-- left/middle/right: high while the corresponding mouse button is pressed.
+-- ps2_clk/ps2_data: bidirectional PS/2 connections, as in MouseCtl.
+-- clk: board clock, 100 MHz by default (see SYSCLK_FREQUENCY_HZ).
 ------------------------------------------------------------------------
 
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
-use IEEE.STD_LOGIC_ARITH.ALL;
-use IEEE.STD_LOGIC_UNSIGNED.ALL;
-
--- simulation library
-library UNISIM;
-use UNISIM.VComponents.all;
+use IEEE.NUMERIC_STD.ALL;
 
 -- the mouse_controller entity declaration
 -- read above for behavioral description and port definitions.
-entity MouseCtl is
+entity Mouse_Control_Delta is
 generic
 (
    SYSCLK_FREQUENCY_HZ : integer := 100000000;
@@ -188,26 +34,18 @@ generic
 port(
    clk         : in std_logic;
    rst         : in std_logic;
-   xpos        : out std_logic_vector(11 downto 0);
-   ypos        : out std_logic_vector(11 downto 0);
-   zpos        : out std_logic_vector(3 downto 0);
+   x_delta     : out signed(8 downto 0);
    left        : out std_logic;
    middle      : out std_logic;
    right       : out std_logic;
    new_event   : out std_logic;
-   value       : in std_logic_vector(11 downto 0);
-   setx        : in std_logic;
-   sety        : in std_logic;
-   setmax_x    : in std_logic;
-   setmax_y    : in std_logic;
-   
    ps2_clk     : inout std_logic;
    ps2_data    : inout std_logic
    
 );
-end MouseCtl;
+end Mouse_Control_Delta;
 
-architecture Behavioral of MouseCtl is
+architecture Behavioral of Mouse_Control_Delta is
 
 ------------------------------------------------------------------------
 -- Ps2 Interface component declaration
@@ -254,13 +92,6 @@ constant SET_SAMPLE_RATE  : std_logic_vector(7 downto 0) := x"F3";
 constant SAMPLE_RATE      : std_logic_vector(7 downto 0) := x"28";
                                                   -- (40 samples/s)
 
--- default maximum value for the horizontal mouse position
-constant DEFAULT_MAX_X : std_logic_vector(11 downto 0) := x"3C0";
-                                                      -- 1279
--- default maximum value for the vertical mouse position
-constant DEFAULT_MAX_Y : std_logic_vector(11 downto 0) := x"280";
-                                                      -- 1023
-
 -- Mouse check tick constants
 constant CHECK_PERIOD_CLOCKS   : integer := ((CHECK_PERIOD_MS*1000000)/(1000000000/SYSCLK_FREQUENCY_HZ));
 constant TIMEOUT_PERIOD_CLOCKS : integer := ((TIMEOUT_PERIOD_MS*1000000)/(1000000000/SYSCLK_FREQUENCY_HZ));
@@ -275,33 +106,10 @@ constant TIMEOUT_PERIOD_CLOCKS : integer := ((TIMEOUT_PERIOD_MS*1000000)/(100000
 -- mouse mode.
 signal haswheel: std_logic := '0';
 
--- horizontal and veritcal mouse position
--- origin of axes is upper-left corner
--- the origin of axes the mouse uses is the lower-left corner
--- The y-axis is inverted, by making negative the y movement received
--- from the mouse (if it was positive it becomes negative
--- and vice versa)
-signal x_pos,y_pos: std_logic_vector(11 downto 0) := (others => '0');
-
--- active when an overflow occurred on the x and y axis
--- bits 6 and 7 from the first byte received from the mouse
-signal x_overflow,y_overflow: std_logic := '0';
-
--- active when the x,y movement is negative
--- bits 4 and 5 from the first byte received from the mouse
-signal x_sign,y_sign: std_logic := '0';
-
--- 2's complement value for incrementing the x_pos,y_pos
--- y_inc is the negated value from the mouse in the third byte
-signal x_inc,y_inc: std_logic_vector(7 downto 0) := (others => '0');
-
--- active for one clock period, indicates new delta movement received
--- on x,y axis
-signal x_new,y_new: std_logic := '0';
-
--- maximum value for x and y position registers(x_pos,y_pos)
-signal x_max: std_logic_vector(11 downto 0) := DEFAULT_MAX_X;
-signal y_max: std_logic_vector(11 downto 0) := DEFAULT_MAX_Y;
+-- Pending horizontal fields, committed only after a complete packet.
+signal x_overflow: std_logic := '0';
+signal x_sign: std_logic := '0';
+signal x_inc: std_logic_vector(7 downto 0) := (others => '0');
 
 -- active when left,middle,right mouse button is down
 signal left_down,middle_down,right_down: std_logic := '0';
@@ -424,166 +232,6 @@ timeout  <= '1' when timeout_cnt = (TIMEOUT_PERIOD_CLOCKS - 1) else '0';
    -- right output the state of the right_down register
    right <= right_down when rising_edge(clk);
 
-   -- xpos output is the horizontal position of the mouse
-   -- it has the range: 0-x_max
-   xpos <= x_pos(11 downto 0) when rising_edge(clk);
-   -- ypos output is the vertical position of the mouse
-   -- it has the range: 0-y_max
-   ypos <= y_pos(11 downto 0) when rising_edge(clk);
-
-   -- sets the value of x_pos from another module when setx is active
-   -- else, computes the new x_pos from the old position when new x
-   -- movement detected by adding the delta movement in x_inc, or by
-   -- adding 256 or -256 when overflow occurs.
-   set_x: process(clk)
-   variable x_inter: std_logic_vector(11 downto 0);
-   variable inc: std_logic_vector(11 downto 0);
-   begin
-      if(rising_edge(clk)) then
-         -- if setx active, set new x_pos value
-         if(setx = '1') then
-            x_pos <= value;
-         -- if delta movement received from mouse
-         elsif(x_new = '1') then
-            -- if negative movement on x axis
-            if(x_sign = '1') then
-               -- if overflow occurred
-               if(x_overflow = '1') then
-                  -- inc is -256
-                  inc := "111000000000";
-               else
-                  -- inc is sign extended x_inc
-                  inc := "1111" & x_inc;
-               end if;
-               -- intermediary horizontal position
-               x_inter := x_pos + inc;
-               -- if first bit of x_inter is 1
-               -- then negative overflow occurred and
-               -- new x position is 0.
-               -- Note: x_pos and x_inter have 11 bits,
-               -- and because xpos has only 10, when
-               -- first bit becomes 1, this is considered
-               -- a negative number when moving left
-               if(x_inter(11) = '1') then
-                  x_pos <= (others => '0');
-               else
-                  x_pos <= x_inter;
-               end if;
-            -- if positive movement on x axis
-            else
-               -- if overflow occurred
-               if(x_overflow = '1') then
-                  -- inc is 256
-                  inc := "000100000000";
-               else
-                  -- inc is sign extended x_inc
-                  inc := "0000" & x_inc;
-               end if;
-               -- intermediary horizontal position
-               x_inter := x_pos + inc;
-               -- if x_inter is greater than x_max
-               -- then positive overflow occurred and
-               -- new x position is x_max.
-               if(x_inter > ('0' & x_max)) then
-                  x_pos <= x_max;
-               else
-                  x_pos <= x_inter;
-               end if;
-            end if;
-         end if;
-      end if;
-   end process set_x;
-
-   -- sets the value of y_pos from another module when sety is active
-   -- else, computes the new y_pos from the old position when new y
-   -- movement detected by adding the delta movement in y_inc, or by
-   -- adding 256 or -256 when overflow occurs.
-   set_y: process(clk)
-   variable y_inter: std_logic_vector(11 downto 0);
-   variable inc: std_logic_vector(11 downto 0);
-   begin
-      if(rising_edge(clk)) then
-         -- if sety active, set new y_pos value
-         if(sety = '1') then
-            y_pos <= value;
-         -- if delta movement received from mouse
-         elsif(y_new = '1') then
-            -- if negative movement on y axis
-            -- Note: axes origin is upper-left corner
-            if(y_sign = '1') then
-               -- if overflow occurred
-               if(y_overflow = '1') then
-                  -- inc is -256
-                  inc := "111100000000";
-               else
-                  -- inc is sign extended y_inc
-                  inc := "1111" & y_inc;
-               end if;
-               -- intermediary vertical position
-               y_inter := y_pos + inc;
-               -- if first bit of y_inter is 1
-               -- then negative overflow occurred and
-               -- new y position is 0.
-               -- Note: y_pos and y_inter have 11 bits,
-               -- and because ypos has only 10, when
-               -- first bit becomes 1, this is considered
-               -- a negative number when moving upward
-               if(y_inter(11) = '1') then
-                  y_pos <= (others => '0');
-               else
-                  y_pos <= y_inter;
-               end if;
-            -- if positive movement on y axis
-            else
-               -- if overflow occurred
-               if(y_overflow = '1') then
-                  -- inc is 256
-                  inc := "000100000000";
-               else
-                  -- inc is sign extended y_inc
-                  inc := "0000" & y_inc;
-               end if;
-               -- intermediary vertical position
-               y_inter := y_pos + inc;
-               -- if y_inter is greater than y_max
-               -- then positive overflow occurred and
-               -- new y position is y_max.
-               if(y_inter > (y_max)) then
-                  y_pos <= y_max;
-               else
-                  y_pos <= y_inter;
-               end if;
-            end if;
-         end if;
-      end if;
-   end process set_y;
-
-   -- sets the maximum value of the x movement register, stored in x_max
-   -- when setmax_x is active, max value should be on value input pin
-   set_max_x: process(clk,rst)
-   begin
-      if(rising_edge(clk)) then
-         if(rst = '1') then
-            x_max <= DEFAULT_MAX_X;
-         elsif(setmax_x = '1') then
-            x_max <= value;
-         end if;
-      end if;
-   end process set_max_x;
-
-   -- sets the maximum value of the y movement register, stored in y_max
-   -- when setmax_y is active, max value should be on value input pin
-   set_max_y: process(clk,rst)
-   begin
-      if(rising_edge(clk)) then
-         if(rst = '1') then
-            y_max <= DEFAULT_MAX_Y;
-         elsif(setmax_y = '1') then
-            y_max <= value;
-         end if;
-      end if;
-   end process set_max_y;
-
    -- Synchronous one process fsm to handle the communication
    -- with the mouse.
    -- When reset and at start-up it enters reset state
@@ -598,13 +246,11 @@ timeout  <= '1' when timeout_cnt = (TIMEOUT_PERIOD_CLOCKS - 1) else '0';
          state <= reset;
          haswheel <= '0';
          x_overflow <= '0';
-         y_overflow <= '0';
          x_sign <= '0';
-         y_sign <= '0';
          x_inc <= (others => '0');
-         y_inc <= (others => '0');
-         x_new <= '0';
-         y_new <= '0';
+         x_delta <= (others => '0');
+         tx_data <= (others => '0');
+         write_data <= '0';
          new_event <= '0';
          left_down <= '0';
          middle_down <= '0';
@@ -621,9 +267,8 @@ timeout  <= '1' when timeout_cnt = (TIMEOUT_PERIOD_CLOCKS - 1) else '0';
          -- because the fsm will transition from the state
          -- that set them on the next rising edge of clock.
          write_data <= '0';
-         x_new <= '0';
-         y_new <= '0';
-         
+         new_event <= '0';
+
          case state is
 
             -- if just powered-up, reset occurred or some error in
@@ -640,13 +285,9 @@ timeout  <= '1' when timeout_cnt = (TIMEOUT_PERIOD_CLOCKS - 1) else '0';
             when reset =>
                haswheel <= '0';
                x_overflow <= '0';
-               y_overflow <= '0';
                x_sign <= '0';
-               y_sign <= '0';
                x_inc <= (others => '0');
-               y_inc <= (others => '0');
-               x_new <= '0';
-               y_new <= '0';
+               x_delta <= (others => '0');
                left_down <= '0';
                middle_down <= '0';
                right_down <= '0';
@@ -865,7 +506,7 @@ timeout  <= '1' when timeout_cnt = (TIMEOUT_PERIOD_CLOCKS - 1) else '0';
             -- then the FSM transitions to reset state.
             when reset_read_id_wait_id =>
                if(read_data = '1') then
-                  if(rx_data = "000000000") then
+                  if(rx_data = "00000000") then
                      -- the mouse does not have a wheel
                      haswheel <= '0';
                      state <= reset_set_resolution;
@@ -1005,8 +646,6 @@ timeout  <= '1' when timeout_cnt = (TIMEOUT_PERIOD_CLOCKS - 1) else '0';
                reset_periodic_check_cnt <= '0';
                -- reset new_event when back in idle state.
                new_event <= '0';
-               -- reset last z delta movement
-               zpos <= (others => '0');
                if(read_data = '1') then
                   -- mouse button states
                   left_down <= rx_data(0);
@@ -1014,19 +653,9 @@ timeout  <= '1' when timeout_cnt = (TIMEOUT_PERIOD_CLOCKS - 1) else '0';
                   right_down <= rx_data(1);
                   -- sign of the movement data
                   x_sign <= rx_data(4);
-                  -- y sign is changed to invert the y axis
-                  -- because the mouse uses the lower-left corner
-                  -- as axes origin and it is placed in the upper-left
-                  -- corner by this inversion (suitable for displaying
-                  -- a mouse cursor on the screen).
-                  -- y movement data from the third packet must be
-                  -- also negated.
-                  y_sign <= not rx_data(5);
-
-                  -- overflow status of the x and y movement
+                  -- Retain X overflow; vertical movement is ignored.
                   x_overflow <= rx_data(6);
-                  y_overflow <= rx_data(7);
-                  
+
                   -- transition to state read_byte_2
                   state <= read_byte_2;
                elsif periodic_check_tick = '1' then -- Check periodically if the mouse is present
@@ -1042,8 +671,6 @@ timeout  <= '1' when timeout_cnt = (TIMEOUT_PERIOD_CLOCKS - 1) else '0';
                if(read_data = '1') then
                   -- put the delta movement in x_inc
                   x_inc <= rx_data;
-                  -- signal the arrival of new x movement data.
-                  x_new <= '1';
                   -- go to state read_byte_3.
                   state <= read_byte_3;
                elsif periodic_check_tick = '1' then -- Check periodically if the mouse is present
@@ -1056,20 +683,11 @@ timeout  <= '1' when timeout_cnt = (TIMEOUT_PERIOD_CLOCKS - 1) else '0';
                end if;
             
             -- wait the third byte of the data, that
-            -- contains the y data movement counter.
-            -- negate its value, for the axis to be
-            -- inverted.
+            -- contains the y movement counter (ignored).
             -- If mouse is in scroll mode, transition
             -- to read_byte_4, else go to mark_new_event
             when read_byte_3 =>
                if(read_data = '1') then
-                  -- when y movement is 0, then ignore
-                  if(rx_data /= "00000000") then
-                     -- 2's complement positive numbers
-                     -- become negative and vice versa
-                     y_inc <= (not rx_data) + "00000001";
-                     y_new <= '1';        
-                  end if;
                   -- if the mouse has a wheel then transition
                   -- to read_byte_4, else go to mark_new_event
                   if(haswheel = '1') then
@@ -1092,8 +710,7 @@ timeout  <= '1' when timeout_cnt = (TIMEOUT_PERIOD_CLOCKS - 1) else '0';
             -- the rest are sign extension.
             when read_byte_4 =>
                if(read_data = '1') then
-                  -- zpos is the delta movement on z
-                  zpos <= rx_data(3 downto 0);
+                  -- Consume the wheel byte without using its movement.
                   -- packet completly received,
                   -- go to mark_new_event
                   state <= mark_new_event;
@@ -1137,7 +754,7 @@ timeout  <= '1' when timeout_cnt = (TIMEOUT_PERIOD_CLOCKS - 1) else '0';
             -- then the FSM transitions to reset state.
             when check_read_id_wait_id =>
                if(read_data = '1') then
-                  if(rx_data = "000000000") or (rx_data = "00000011") then
+                  if(rx_data = "00000000") or (rx_data = "00000011") then
                      -- The mouse is present, so reset the timeout counter
                      reset_timeout_cnt <= '1';
                      state <= read_byte_1;
@@ -1156,6 +773,15 @@ timeout  <= '1' when timeout_cnt = (TIMEOUT_PERIOD_CLOCKS - 1) else '0';
             -- it will be reset in next state
             -- informs client new packet received and processed
             when mark_new_event =>
+               if x_overflow = '1' then
+                  if x_sign = '1' then
+                     x_delta <= to_signed(-256, 9);
+                  else
+                     x_delta <= to_signed(255, 9);
+                  end if;
+               else
+                  x_delta <= signed(x_sign & x_inc);
+               end if;
                new_event <= '1';
                state <= read_byte_1;
 

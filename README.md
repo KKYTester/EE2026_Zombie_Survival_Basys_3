@@ -139,6 +139,27 @@ inputs are kept idle as requested. Continuous turning would require recentering
 the driver or exposing raw movement deltas. Y movement and the wheel
 do not affect the view. Mouse clicks are indicators only; combat is not added.
 
+`Mouse_Control_Delta.vhd` now provides a separate `Mouse_Control_Delta` entity
+for later continuous-turn integration. It outputs `x_delta`, a signed 9-bit
+horizontal count from -256 to +255 (right positive, left negative). Sample it
+once on the 100 MHz clock when its one-cycle `new_event` pulse is high, including
+zero-delta/button-only packets. The value holds between events and clears on
+reset. X overflow saturates that packet's delta to -256 or +255 according to
+its sign. There are no accumulated positions or position-setting/limit inputs;
+Y and wheel bytes are consumed but ignored. Mouse button outputs and the PS/2
+ports remain. The existing top and player controller still use `MouseCtl` and
+retain the absolute-position limitation above until explicitly rewired. For a
+future Verilog connection, declare the delta wire `signed [8:0]` and sign-extend
+it before wider angle arithmetic.
+
+Run `./tests/run_mouse_delta_checks.ps1` for the isolated byte-level controller
+simulation (optional `-VivadoBin` as below). It tests all 512 signed encodings in
+both three- and four-byte packet modes, overflow, ignored Y/wheel movement,
+button outputs, event timing, repeated movement, and partial-packet error/reset.
+The test substitutes the PS/2 byte transport; it does not simulate physical PS/2
+signalling. Its stand-in belongs only in the simulation fileset, separately from
+the real `Ps2Interface.vhd`.
+
 Connect a wired mouse to the Basys 3 upper-right USB host port. The constraints
 enable C17 for `ps2_clk`, B17 for `ps2_data`, pull-ups, all LED pins, and the four
 directional button pins, matching the
