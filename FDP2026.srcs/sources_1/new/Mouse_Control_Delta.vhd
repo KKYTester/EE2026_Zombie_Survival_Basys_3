@@ -7,7 +7,8 @@
 -- from packet byte 1 XSIGN and the full byte 2. Right is positive, left is
 -- negative. X overflow saturates to +255 or -256 according to XSIGN.
 -- No absolute positions, position limits, or position-setting inputs remain.
--- Y and wheel bytes are consumed for packet framing; their movement is ignored.
+-- y_delta uses the same signed format and saturation, positive upward.
+-- The wheel byte is consumed for packet framing; wheel movement is ignored.
 --
 -- new_event: one-clk valid pulse per complete packet, including zero movement
 -- and button-only packets. Sample x_delta ONCE when new_event is high, on clk.
@@ -35,6 +36,7 @@ port(
    clk         : in std_logic;
    rst         : in std_logic;
    x_delta     : out signed(8 downto 0);
+   y_delta     : out signed(8 downto 0);
    left        : out std_logic;
    middle      : out std_logic;
    right       : out std_logic;
@@ -106,7 +108,9 @@ constant TIMEOUT_PERIOD_CLOCKS : integer := ((TIMEOUT_PERIOD_MS*1000000)/(100000
 -- mouse mode.
 signal haswheel: std_logic := '0';
 
--- Pending horizontal fields, committed only after a complete packet.
+-- Pending movement fields, committed only after a complete packet.
+signal y_overflow, y_sign: std_logic := '0';
+signal y_inc: std_logic_vector(7 downto 0) := (others => '0');
 signal x_overflow: std_logic := '0';
 signal x_sign: std_logic := '0';
 signal x_inc: std_logic_vector(7 downto 0) := (others => '0');
@@ -246,9 +250,11 @@ timeout  <= '1' when timeout_cnt = (TIMEOUT_PERIOD_CLOCKS - 1) else '0';
          state <= reset;
          haswheel <= '0';
          x_overflow <= '0';
+         y_overflow <= '0'; y_sign <= '0'; y_inc <= (others => '0');
          x_sign <= '0';
          x_inc <= (others => '0');
          x_delta <= (others => '0');
+         y_delta <= (others => '0');
          tx_data <= (others => '0');
          write_data <= '0';
          new_event <= '0';
@@ -285,9 +291,11 @@ timeout  <= '1' when timeout_cnt = (TIMEOUT_PERIOD_CLOCKS - 1) else '0';
             when reset =>
                haswheel <= '0';
                x_overflow <= '0';
+         y_overflow <= '0'; y_sign <= '0'; y_inc <= (others => '0');
                x_sign <= '0';
                x_inc <= (others => '0');
                x_delta <= (others => '0');
+         y_delta <= (others => '0');
                left_down <= '0';
                middle_down <= '0';
                right_down <= '0';
@@ -653,8 +661,9 @@ timeout  <= '1' when timeout_cnt = (TIMEOUT_PERIOD_CLOCKS - 1) else '0';
                   right_down <= rx_data(1);
                   -- sign of the movement data
                   x_sign <= rx_data(4);
-                  -- Retain X overflow; vertical movement is ignored.
+                  -- Retain each axis sign and overflow flag.
                   x_overflow <= rx_data(6);
+                  y_sign <= rx_data(5); y_overflow <= rx_data(7);
 
                   -- transition to state read_byte_2
                   state <= read_byte_2;
@@ -683,11 +692,12 @@ timeout  <= '1' when timeout_cnt = (TIMEOUT_PERIOD_CLOCKS - 1) else '0';
                end if;
             
             -- wait the third byte of the data, that
-            -- contains the y movement counter (ignored).
+            -- contains the y movement counter.
             -- If mouse is in scroll mode, transition
             -- to read_byte_4, else go to mark_new_event
             when read_byte_3 =>
                if(read_data = '1') then
+                  y_inc <= rx_data;
                   -- if the mouse has a wheel then transition
                   -- to read_byte_4, else go to mark_new_event
                   if(haswheel = '1') then
@@ -781,6 +791,15 @@ timeout  <= '1' when timeout_cnt = (TIMEOUT_PERIOD_CLOCKS - 1) else '0';
                   end if;
                else
                   x_delta <= signed(x_sign & x_inc);
+               end if;
+               if y_overflow = '1' then
+                  if y_sign = '1' then
+                     y_delta <= to_signed(-256, 9);
+                  else
+                     y_delta <= to_signed(255, 9);
+                  end if;
+               else
+                  y_delta <= signed(y_sign & y_inc);
                end if;
                new_event <= '1';
                state <= read_byte_1;

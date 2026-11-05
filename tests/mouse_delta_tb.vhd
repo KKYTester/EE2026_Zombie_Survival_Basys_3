@@ -37,12 +37,12 @@ architecture test of mouse_delta_tb is
    signal clk : std_logic := '0';
    signal rst : std_logic := '1';
    signal ps2_clk, ps2_data : std_logic := 'H';
-   signal x_delta : signed(8 downto 0);
+   signal x_delta, y_delta : signed(8 downto 0);
    signal new_event, left, middle, right : std_logic;
 begin
    clk <= not clk after 5 ns;
    dut: entity work.Mouse_Control_Delta
-      port map(clk => clk, rst => rst, x_delta => x_delta,
+      port map(clk => clk, rst => rst, x_delta => x_delta, y_delta => y_delta,
                left => left, middle => middle, right => right,
                new_event => new_event, ps2_clk => ps2_clk, ps2_data => ps2_data);
 
@@ -83,15 +83,20 @@ begin
 
       procedure packet(header, xbyte, ybyte : std_logic_vector(7 downto 0);
                        expected : integer; wheel : boolean) is
-         variable previous : signed(8 downto 0);
+         variable previous, previous_y : signed(8 downto 0);
+         variable expected_y : integer;
       begin
-         previous := x_delta;
+         previous := x_delta; previous_y := y_delta;
+         expected_y := to_integer(signed(header(5) & ybyte));
+         if header(7) = '1' then
+            if header(5) = '1' then expected_y := -256; else expected_y := 255; end if;
+         end if;
          send_byte(header); send_byte(xbyte);
-         assert new_event = '0' and x_delta = previous
+         assert new_event = '0' and x_delta = previous and y_delta = previous_y
             report "Published before packet completion" severity failure;
          send_byte(ybyte);
          if wheel then
-            assert new_event = '0' and x_delta = previous
+            assert new_event = '0' and x_delta = previous and y_delta = previous_y
                report "Published before wheel byte" severity failure;
             send_byte(x"F9");
          end if;
@@ -99,6 +104,7 @@ begin
          assert new_event = '1' and to_integer(x_delta) = expected
             report "Wrong signed delta: expected " & integer'image(expected) &
                    ", got " & integer'image(to_integer(x_delta)) severity failure;
+         assert to_integer(y_delta) = expected_y report "Wrong signed Y delta" severity failure;
          assert left = header(0) and middle = header(2) and right = header(1)
             report "Button outputs changed" severity failure;
          wait until rising_edge(clk); wait for 1 ns;
@@ -110,7 +116,7 @@ begin
       begin
          rst <= '1'; received_valid <= '0'; receive_error <= '0';
          wait until falling_edge(clk); wait for 1 ns;
-         assert x_delta = 0 and new_event = '0' and
+         assert x_delta = 0 and y_delta = 0 and new_event = '0' and
                 left = '0' and middle = '0' and right = '0'
             report "Reset failed" severity failure;
          rst <= '0';
@@ -132,6 +138,13 @@ begin
             packet(header, std_logic_vector(movement(7 downto 0)),
                    std_logic_vector(to_unsigned((delta + 256) mod 256, 8)), delta, mode = 1);
          end loop;
+         for delta in -256 to 255 loop
+            movement := to_signed(delta, 9);
+            header := x"08"; header(5) := movement(8);
+            packet(header, x"00", std_logic_vector(movement(7 downto 0)), 0, mode = 1);
+         end loop;
+         packet(x"88", x"00", x"00", 0, mode = 1);
+         packet(x"A8", x"00", x"FF", 0, mode = 1);
          packet(x"48", x"00", x"FF", 255, mode = 1);
          packet(x"58", x"FF", x"00", -256, mode = 1);
          -- Repeated same-direction packets must remain deltas without saturation.
@@ -150,7 +163,7 @@ begin
          reset_controller; initialize(mode = 1);
          packet(x"08", x"01", x"00", 1, mode = 1);
       end loop;
-      report "PASS: all signed deltas, overflow, buttons, ignored Y/wheel, event timing, repeated movement, partial-packet error/reset";
+      report "PASS: all signed X/Y deltas, overflow, buttons, ignored wheel, event timing, repeated movement, partial-packet error/reset";
       std.env.finish;
       wait;
    end process;

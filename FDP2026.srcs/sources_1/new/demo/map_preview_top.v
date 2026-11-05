@@ -5,7 +5,7 @@
 //     pattern that changes every pixel (WORLD_PATTERN=1, used by tb_oled),
 //     optionally answered WORLD_LATENCY clocks late to prove the look-ahead.
 //   - Player tile (Member 1): the P1 spawn tile; the player does not move.
-//   - Mouse (Member 1): MouseCtl with the pointer clamped to the screen.
+//   - Mouse: relative deltas accumulated into a screen-clamped pointer.
 //   - Enemies (Member 2): zombie_stub accepts every spawn. Test actions on
 //     switches, one event per flip: SW14 defeats the oldest zombie, SW13
 //     stands in for a zombie hitting the player.
@@ -39,33 +39,14 @@ module map_preview_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     wire [6:0] mouse_x; wire [5:0] mouse_y;
     wire mouse_left, mouse_right, mouse_event;
     generate if(USE_MOUSE) begin : g_mouse
-        wire [11:0] xpos,ypos;
-        wire [3:0] zpos;
+        wire signed [8:0] x_delta, y_delta;
         wire left_btn,middle_btn,right_btn,new_event;
-        reg [11:0] value=0;
-        reg setx=0,sety=0,setmax_x=0,setmax_y=0;
-        reg [2:0] init_step=0;
-        // After reset, limit the pointer to the 96x64 screen and centre it.
-        always @(posedge clk) begin
-            setx<=0; sety<=0; setmax_x<=0; setmax_y<=0;
-            if(rst) init_step<=0;
-            else if(init_step!=5) begin
-                init_step<=init_step+1'b1;
-                case(init_step)
-                    1: begin value<=12'd95; setmax_x<=1; end
-                    2: begin value<=12'd63; setmax_y<=1; end
-                    3: begin value<=12'd48; setx<=1; end
-                    4: begin value<=12'd40; sety<=1; end
-                    default: ;
-                endcase
-            end
-        end
-        MouseCtl mouse(.clk(clk),.rst(rst),.xpos(xpos),.ypos(ypos),.zpos(zpos),
+        Mouse_Control_Delta mouse(.clk(clk),.rst(rst),
+            .x_delta(x_delta),.y_delta(y_delta),
             .left(left_btn),.middle(middle_btn),.right(right_btn),.new_event(new_event),
-            .value(value),.setx(setx),.sety(sety),.setmax_x(setmax_x),.setmax_y(setmax_y),
             .ps2_clk(PS2Clk),.ps2_data(PS2Data));
-        assign mouse_x = (xpos>12'd95) ? 7'd95 : xpos[6:0];
-        assign mouse_y = (ypos>12'd63) ? 6'd63 : ypos[5:0];
+        Mouse_Pointer pointer(.clk(clk),.reset(rst),.mouse_event(new_event),
+            .x_delta(x_delta),.y_delta(y_delta),.x(mouse_x),.y(mouse_y));
         assign mouse_left = left_btn;
         assign mouse_right = right_btn;
         assign mouse_event = new_event;

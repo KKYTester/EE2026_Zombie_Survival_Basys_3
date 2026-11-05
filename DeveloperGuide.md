@@ -80,7 +80,9 @@ once on the 100 MHz clock when its one-cycle `new_event` pulse is high, includin
 zero-delta/button-only packets. The value holds between events and clears on
 reset. X overflow saturates that packet's delta to -256 or +255 according to
 its sign. There are no accumulated positions or position-setting/limit inputs;
-Y and wheel bytes are consumed but ignored. Mouse button outputs and the PS/2
+The signed `y_delta` output has the same format and saturation, with positive
+values upward. `Mouse_Pointer` accumulates X/Y for the demo cursor, clamps to
+96x64, and inverts Y for screen coordinates. Wheel movement is ignored. Mouse button outputs and the PS/2
 ports remain. Mouse clicks are indicators only; combat is not added.
 
 The top connects `x_delta` through a `signed [8:0]` wire to the controller's
@@ -96,7 +98,7 @@ Reset restores the spawn angle and clears pending movement.
 
 Run `./tests/run_mouse_delta_checks.ps1` for the isolated byte-level controller
 simulation (optional `-VivadoBin` as below). It tests all 512 signed encodings in
-both three- and four-byte packet modes, overflow, ignored Y/wheel movement,
+both three- and four-byte packet modes, overflow, signed Y and ignored wheel movement,
 button outputs, event timing, repeated movement, and partial-packet error/reset.
 The test substitutes the PS/2 byte transport; it does not simulate physical PS/2
 signalling. Its stand-in belongs only in the simulation fileset, separately from

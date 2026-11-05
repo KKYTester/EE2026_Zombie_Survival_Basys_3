@@ -57,7 +57,7 @@ module My_Top_Module (
     wire mouse_left, mouse_middle, mouse_right, mouse_event;
     // Relative movement permits continuous turning without position limits.
     Mouse_Control_Delta u_Mouse_Control_Delta (
-        .clk(clk), .rst(reset), .x_delta(mouse_x_delta),
+        .clk(clk), .rst(reset), .x_delta(mouse_x_delta), .y_delta(),
         .left(mouse_left), .middle(mouse_middle), .right(mouse_right),
         .new_event(mouse_event),
         .ps2_clk(ps2_clk), .ps2_data(ps2_data)

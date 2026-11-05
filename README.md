@@ -111,8 +111,10 @@ Design folders are under `FDP2026.srcs/sources_1/new/`:
 | `ui/` | Pixel compositor, menus, HUD, weapon controller/sprite, overlays and display helpers |
 | `demo/` | `map_preview_top` and temporary `zombie_stub` |
 
-The course `Oled_Display.v`, `Mouse_Control.vhd` and `Ps2Interface.vhd` are
-reused from the shared source folder. `constraints/map_preview.xdc` is the
+The course `Oled_Display.v` and `Ps2Interface.vhd` and the relative-motion
+`Mouse_Control_Delta.vhd` are reused from the shared source folder.
+`Mouse_Pointer` accumulates signed X/Y packet deltas into a 96x64 cursor;
+PS/2 positive Y moves the pointer upward. `constraints/map_preview.xdc` is the
 standalone demo's pin/timing file.
 
 ### Run the standalone map/game demo
