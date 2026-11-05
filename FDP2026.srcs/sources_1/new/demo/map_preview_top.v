@@ -6,8 +6,12 @@
 //     optionally answered WORLD_LATENCY clocks late to prove the look-ahead.
 //   - Player tile (Member 1): the P1 spawn tile; the player does not move.
 //   - Mouse (Member 1): MouseCtl with the pointer clamped to the screen.
-//   - Enemies (Member 2): zombie_stub accepts every spawn; btnR defeats the
-//     oldest zombie; btnD stands in for a zombie hitting the player.
+//   - Enemies (Member 2): zombie_stub accepts every spawn. Test actions on
+//     switches, one event per flip: SW14 defeats the oldest zombie, SW13
+//     stands in for a zombie hitting the player.
+// Controls: SW15 up = reset (title, seed 1ACE). btnC starts/fires, left-click
+// fires, right-click reloads, SW0 shows the map. btnU/btnL/btnR/btnD are not
+// used here: they are reserved for Member 1's movement.
 // In the integrated game, My_Top_Module instantiates game_core and connects
 // the real modules to the same ports instead.
 module map_preview_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
@@ -17,8 +21,8 @@ module map_preview_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     parameter SPAWN_SHIFT=26, parameter CLEAR_SHIFT=27,
     parameter FLASH_SHIFT=22, parameter RECOIL_SHIFT=23, parameter RELOAD_SHIFT=25,
     parameter WIN_WAVE=10, parameter WORLD_PATTERN=0, parameter WORLD_LATENCY=0)(
-    input wire clk, input wire sw0, input wire btnC, input wire btnU,
-    input wire btnL, input wire btnR, input wire btnD,
+    input wire clk, input wire sw0, input wire btnC,
+    input wire sw13, input wire sw14, input wire sw15,
     inout wire PS2Clk, inout wire PS2Data,
     output wire [15:0] led, output wire [7:0] JB,
     output wire [6:0] seg, output wire dp, output wire [3:0] an);
@@ -26,7 +30,7 @@ module map_preview_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     // FPGA power-up initialisation; all functional resets below are synchronous.
     (* ASYNC_REG="TRUE" *) reg [1:0] reset_sync=2'b11;
     wire rst=reset_sync[1];
-    always @(posedge clk) reset_sync<={reset_sync[0],btnU};
+    always @(posedge clk) reset_sync<={reset_sync[0],sw15};      // SW15 up = reset
 
     // ---------------- Mouse (Member 1 will own this) ----------------
     // Simulation hook: with USE_MOUSE=0 a testbench drives these registers.
@@ -71,12 +75,12 @@ module map_preview_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         assign mouse_event = sim_mouse_event;
     end endgenerate
 
-    // ---------------- Test buttons (stand-ins for combat) ----------------
-    wire press_r,press_d;
-    button_debounce #(.STABLE_CYCLES(DEBOUNCE_CYCLES)) button_right(
-        .clk(clk),.rst(rst),.button(btnR),.pressed(press_r));
-    button_debounce #(.STABLE_CYCLES(DEBOUNCE_CYCLES)) button_down(
-        .clk(clk),.rst(rst),.button(btnD),.pressed(press_d));
+    // ---------------- Test switches (stand-ins for combat) ----------------
+    wire test_kill, test_hit;
+    switch_toggle #(.STABLE_CYCLES(DEBOUNCE_CYCLES)) kill_switch(
+        .clk(clk),.rst(rst),.switch_in(sw14),.flipped(test_kill));
+    switch_toggle #(.STABLE_CYCLES(DEBOUNCE_CYCLES)) hit_switch(
+        .clk(clk),.rst(rst),.switch_in(sw13),.flipped(test_hit));
 
     // ---------------- World view stand-in (Member 1) ----------------
     wire [6:0] pixel_x; wire [5:0] pixel_y;
@@ -113,7 +117,7 @@ module map_preview_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .FLASH_SHIFT(FLASH_SHIFT),.RECOIL_SHIFT(RECOIL_SHIFT),.RELOAD_SHIFT(RELOAD_SHIFT),
         .WIN_WAVE(WIN_WAVE)) game(
         .clk(clk),.rst(rst),
-        .btn_c(btnC),.btn_l(btnL),.sw_map(sw0),
+        .btn_c(btnC),.sw_map(sw0),
         .oled_jb(JB),.seg(seg),.dp(dp),.an(an),.led(led),
         .mouse_x(mouse_x),.mouse_y(mouse_y),.mouse_left(mouse_left),
         .mouse_right(mouse_right),.mouse_event(mouse_event),
@@ -123,12 +127,12 @@ module map_preview_top #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .player_tile(p1_addr),
         .world_pixel(world_pixel),.pixel_x(pixel_x),.pixel_y(pixel_y),.frame_begin(frame_begin),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.occupied(occupied),
-        .player_hit(press_d),
+        .player_hit(test_hit),
         .spawn_req(spawn_req),.spawn_tile(spawn_tile),
         .enemies_clear(enemies_clear),.shot_fired(shot_fired));
 
     // ---------------- Enemy stand-in (Member 2) ----------------
     zombie_stub enemies(.clk(clk),.rst(rst),.clear(enemies_clear),
-        .spawn_req(spawn_req),.spawn_tile(spawn_tile),.defeat(press_r && playing),
+        .spawn_req(spawn_req),.spawn_tile(spawn_tile),.defeat(test_kill && playing),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.occupied(occupied));
 endmodule

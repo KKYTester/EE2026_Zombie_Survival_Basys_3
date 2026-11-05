@@ -25,7 +25,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     parameter WIN_WAVE=10)(
     input wire clk, input wire rst,
     // Board
-    input wire btn_c, input wire btn_l,           // raw buttons, debounced here
+    input wire btn_c,                             // raw button, debounced here
     input wire sw_map,                            // raw switch: map overlay
     output wire [7:0] oled_jb,                    // Pmod OLEDrgb on JB
     output wire [6:0] seg, output wire dp, output wire [3:0] an,
@@ -47,10 +47,11 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     input wire [15:0] world_pixel,
     output wire [6:0] pixel_x, output wire [5:0] pixel_y,
     output wire frame_begin,                      // one clk pulse per OLED frame
+    output wire frame_idle,                       // safe window to present the next world frame
     // Enemies and combat (Member 2)
     input wire spawn_ack, input wire enemy_defeated,
     input wire [255:0] occupied, input wire player_hit,
-    output wire spawn_req, output wire [7:0] spawn_tile,
+    output wire spawn_req, output wire [7:0] spawn_tile, output wire spawn_busy,
     output wire enemies_clear, output wire shot_fired);
 
     (* ASYNC_REG="TRUE" *) reg [1:0] switch_sync=0;
@@ -67,11 +68,10 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     end
 
     // ---------------- Buttons ----------------
-    wire press_c,press_l;
+    // btnU/btnL/btnR/btnD are left free for Member 1's movement controls.
+    wire press_c;
     button_debounce #(.STABLE_CYCLES(DEBOUNCE_CYCLES)) button_filter(
         .clk(clk),.rst(rst),.button(btn_c),.pressed(press_c));
-    button_debounce #(.STABLE_CYCLES(DEBOUNCE_CYCLES)) button_left(
-        .clk(clk),.rst(rst),.button(btn_l),.pressed(press_l));
 
     // ---------------- Game flow, map and play state ----------------
     wire ready,busy;
@@ -96,7 +96,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         mouse_right_prev <= rst ? 1'b0 : mouse_right;
     end
     wire fire_request = playing_now && (press_c || (mouse_left && !mouse_left_prev));
-    wire reload_request = playing_now && (press_l || (mouse_right && !mouse_right_prev));
+    // Reload: a new right-click during play (no button, so btnL stays free for movement).
+    wire reload_request = playing_now && mouse_right && !mouse_right_prev;
     wire weapon_flash, weapon_recoil, weapon_reloading;
     wire [2:0] ammo;
     wire [4:0] weapon_drop;
@@ -106,7 +107,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     always @(posedge clk) if(rst) seed_counter<=1; else seed_counter<=seed_counter+1'b1;
     game_flow #(.ENABLE_2P(ENABLE_2P),.GEN_SHIFT(GEN_SHIFT),
         .OVER_SHIFT(OVER_SHIFT)) flow(
-        .clk(clk),.rst(rst),.btn_c(press_c),.btn_l(press_l),.btn_r(1'b0),
+        .clk(clk),.rst(rst),.btn_c(press_c),.btn_l(1'b0),.btn_r(1'b0),
         .mouse_x(mouse_x),.mouse_y(mouse_y),.mouse_left(mouse_left),.mouse_event(mouse_event),
         .map_ready(ready),.map_busy(busy),.health_zero(health==2'd0),.game_won(game_won),
         .state(flow_state),.sel(menu_sel),.regenerate(regenerate),.play_start(play_start),
@@ -117,7 +118,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .clk(clk),.rst(rst),.play_start(play_start),.playing(playing_now),
         .map_bits(published_map),.occupied(zombies),.player_tile(player_tile),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.wave(wave),
-        .spawn_req(spawn_req),.spawn_tile(spawn_tile),.alive(alive),
+        .spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_busy(spawn_busy),.alive(alive),
         .remaining(remaining),.wave_clear(wave_clear),.game_won(game_won));
     hud_effects_ctrl #(.TINT_SHIFT(TINT_SHIFT),
         .BLINK_SHIFT(BLINK_SHIFT)) effects_ctrl(
@@ -145,10 +146,28 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     wire [5:0] py=pixel_index / 96;
     // World pixel look-ahead: ask for the next pixel, sample it on the last
     // OLED clock of the current one (phase 15), use it when that pixel is sent.
-    wire [12:0] ahead_index = !sending_pixels ? 13'd0 :
-                              (pixel_index==13'd6143) ? 13'd0 : pixel_index+1'b1;
-    assign pixel_x = ahead_index % 96;
-    assign pixel_y = ahead_index / 96;
+    reg [12:0] request_index, ahead_index, row_index;
+    reg [5:0] request_row;
+    reg [6:0] request_x;
+    reg [5:0] request_y;
+    // Capture the OLED index before incrementing and converting coordinates.
+    // A row is three groups of 32 pixels.
+    wire [7:0] column_group = row_index[12:5] - (8'd3 * request_row);
+    always @(posedge clk) begin
+        if(rst) begin
+            request_index<=13'd6143; ahead_index<=0; row_index<=0;
+            request_row<=0; request_x<=0; request_y<=0;
+        end else begin
+            request_index<=sending_pixels ? pixel_index : 13'd6143;
+            ahead_index<=request_index==6143 ? 13'd0 : request_index+1'b1;
+            row_index<=ahead_index;
+            request_row<=ahead_index[12:5] / 8'd3;
+            request_x<={column_group[1:0],row_index[4:0]};
+            request_y<=request_row;
+        end
+    end
+    assign pixel_x = request_x;
+    assign pixel_y = request_y;
     reg [3:0] pixel_phase;
     reg [15:0] world_now, world_last;
     always @(posedge oled_clk) begin
@@ -161,7 +180,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
             if(!sending_pixels) world_now<=world_pixel;         // pixel 0 of the next frame
             else if(pixel_phase==4'd15) begin
                 world_now<=world_pixel;
-                if(ahead_index==13'd6143) world_last<=world_pixel;  // sent by the tail bridge
+                if(pixel_index==13'd6142) world_last<=world_pixel; // Tail bridge sends the final pixel.
             end
         end
     end
@@ -169,6 +188,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     reg frame_begin_prev;
     always @(posedge clk) frame_begin_prev <= rst ? 1'b0 : oled_frame_begin;
     assign frame_begin = oled_frame_begin && !frame_begin_prev;
+    assign frame_idle = !sending_pixels && !oled_frame_begin;
 
     reg [255:0] frame_map;
     reg [7:0] frame_p1,frame_p2;

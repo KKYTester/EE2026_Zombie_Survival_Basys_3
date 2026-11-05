@@ -123,10 +123,11 @@ for team work. For this standalone demo:
 | Mouse pointer + left-click | Select/confirm the enabled 1-player title option |
 | btnC | Confirm 1-player start; fire during gameplay |
 | Left-click during gameplay | Fire the pistol |
-| Right-click or btnL during gameplay | Reload a partially used magazine |
-| btnR during gameplay | Temporary test action: defeat the oldest stub zombie |
-| btnD during gameplay | Temporary test action: lose one heart |
-| btnU | Reset to the title and initialise the subsystem |
+| Right-click during gameplay | Reload a partially used magazine |
+| SW14 flip during gameplay | Temporary test action: defeat the oldest stub zombie (each flip = one) |
+| SW13 flip during gameplay | Temporary test action: lose one heart (each flip = one) |
+| SW15 up | Reset to the title and initialise the subsystem (put it down again to run) |
+| btnU, btnL, btnR, btnD | Not used: reserved for Member 1's movement controls |
 | SW0 off | World view with gameplay overlays |
 | SW0 on | Add the whole 16x16 map as a 64x64 overlay at x=32..95 |
 | Seven-segment display | Show the active map seed as four hexadecimal digits |

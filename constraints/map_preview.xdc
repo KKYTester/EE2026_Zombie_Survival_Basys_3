@@ -3,7 +3,6 @@ set_property -dict {PACKAGE_PIN W5 IOSTANDARD LVCMOS33} [get_ports clk]
 create_clock -name sys_clk -period 10.000 [get_ports clk]
 set_property -dict {PACKAGE_PIN V17 IOSTANDARD LVCMOS33} [get_ports sw0]
 set_property -dict {PACKAGE_PIN U18 IOSTANDARD LVCMOS33} [get_ports btnC]
-set_property -dict {PACKAGE_PIN T18 IOSTANDARD LVCMOS33} [get_ports btnU]
 set_property -dict {PACKAGE_PIN U16 IOSTANDARD LVCMOS33} [get_ports {led[0]}]
 set_property -dict {PACKAGE_PIN E19 IOSTANDARD LVCMOS33} [get_ports {led[1]}]
 set_property -dict {PACKAGE_PIN U19 IOSTANDARD LVCMOS33} [get_ports {led[2]}]
@@ -32,7 +31,6 @@ set_property -dict {PACKAGE_PIN C16 IOSTANDARD LVCMOS33} [get_ports {JB[7]}]
 # game_core instance is named 'game' in map_preview_top; in My_Top_Module use that instance's name.
 create_generated_clock -name oled_clk -source [get_ports clk] -divide_by 16 [get_pins {game/clk_div_reg[3]/Q}]
 # Only external asynchronous inputs up to their first synchronizer are exempt.
-set_false_path -from [get_ports btnU] -to [get_pins {reset_sync_reg[0]/D}]
 set_false_path -from [get_ports sw0] -to [get_pins {game/switch_sync_reg[0]/D}]
 set_false_path -from [get_ports btnC] -to [get_pins {game/button_filter/sync_ff_reg[0]/D}]
 # ASSUMPTION: reserve 20 ns external setup budget for SPI data/control.
@@ -59,15 +57,16 @@ set_property -dict {PACKAGE_PIN V4 IOSTANDARD LVCMOS33} [get_ports {an[2]}]
 set_property -dict {PACKAGE_PIN W4 IOSTANDARD LVCMOS33} [get_ports {an[3]}]
 
 
-# Menu buttons (debounced; first synchronizer stage exempt like btnC).
-set_property -dict {PACKAGE_PIN W19 IOSTANDARD LVCMOS33} [get_ports btnL]
-set_property -dict {PACKAGE_PIN T17 IOSTANDARD LVCMOS33} [get_ports btnR]
-set_false_path -from [get_ports btnL] -to [get_pins {game/button_left/sync_ff_reg[0]/D}]
-set_false_path -from [get_ports btnR] -to [get_pins {button_right/sync_ff_reg[0]/D}]
-# btnD: test 'take damage' button during play (stand-in until combat exists).
-set_property -dict {PACKAGE_PIN U17 IOSTANDARD LVCMOS33} [get_ports btnD]
-set_false_path -from [get_ports btnD] -to [get_pins {button_down/sync_ff_reg[0]/D}]
 
 # USB mouse via the Basys 3 USB-HID host (PS/2 signals), used by MouseCtl.
 set_property -dict {PACKAGE_PIN C17 IOSTANDARD LVCMOS33 PULLUP true} [get_ports PS2Clk]
 set_property -dict {PACKAGE_PIN B17 IOSTANDARD LVCMOS33 PULLUP true} [get_ports PS2Data]
+
+# Switches: SW15 = reset (was btnU), SW14 / SW13 = test kill / test hit (were btnR / btnD).
+# btnU, btnL, btnR, btnD are unassigned: reserved for Member 1's movement.
+set_property -dict {PACKAGE_PIN R2 IOSTANDARD LVCMOS33} [get_ports sw15]
+set_property -dict {PACKAGE_PIN T1 IOSTANDARD LVCMOS33} [get_ports sw14]
+set_property -dict {PACKAGE_PIN U1 IOSTANDARD LVCMOS33} [get_ports sw13]
+set_false_path -from [get_ports sw15] -to [get_pins {reset_sync_reg[0]/D}]
+set_false_path -from [get_ports sw14] -to [get_pins {kill_switch/sync_ff_reg[0]/D}]
+set_false_path -from [get_ports sw13] -to [get_pins {hit_switch/sync_ff_reg[0]/D}]
