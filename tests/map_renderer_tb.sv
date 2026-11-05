@@ -11,7 +11,7 @@ module map_renderer_tb;
     Map_Renderer #(.CLK_HZ(2400000)) dut (.clk(clk), .reset(reset), .display_clk(display_clk),
         .frame_begin(frame_begin), .pixel_index(pixel_index), .pixel_data(pixel_data), .column_depth(depth),
         .x_coord(x_coord), .y_coord(y_coord), .theta(theta), .game_tick());
-    reg [16:0] expected0[0:95], expected1[0:95];
+    reg [16:0] expected0[0:95], expected1[0:95], expected2[0:95];
     integer p, c, row, h, top, fd, bank;
     reg [16:0] expected;
     reg [15:0] expected_color;
@@ -28,8 +28,10 @@ module map_renderer_tb;
             for (p=0;p<6144;p=p+1) begin
                 pixel_index=p; #1;
                 c=p%96; row=p/96;
-                expected=which==0 ? expected0[c] : expected1[c];
+                expected=which==0 ? expected0[c] : which==1 ? expected1[c] : expected2[c];
                 h=expected[6:0]; top=(64-h)/2;
+                if (which==2 && (h!=18 || depth<112 || depth>113))
+                    $fatal(1,"Flat wall curved at column %0d",c);
                 expected_color=row<top ? 16'h18e7 : row<top+h ? 16'hbdf7 : 16'h3184;
                 if (pixel_data !== expected_color || depth !== expected[16:7])
                     $fatal(1,"Frame %0d pixel %0d got %h depth %0d expected %h depth %0d",
@@ -48,6 +50,7 @@ module map_renderer_tb;
     initial begin
         $readmemh("frame0.mem",expected0);
         $readmemh("frame1.mem",expected1);
+        $readmemh("frame2.mem",expected2);
         repeat (4) @(negedge display_clk);
         #1; if (pixel_data !== 0 || depth !== 1023) $fatal(1,"Display reset");
         reset=0;
@@ -77,6 +80,13 @@ module map_renderer_tb;
         // Do not export the frame a second time.
         display_frame_start;
         check_frame(1);
+        // A south-facing flat wall: identical wall height at all 96 columns.
+        x_coord=32'd34816; y_coord=32'd18432; theta=32'd512;
+        wait(dut.state==dut.IDLE);
+        wait(dut.state==dut.WAIT_SWAP);
+        repeat (5) @(negedge display_clk);
+        display_frame_start;
+        check_frame(2);
         x_coord=32'd34816; y_coord=32'd34816; theta=32'd128;
         @(negedge display_clk); reset=1;
         repeat (3) @(negedge display_clk);
@@ -92,8 +102,8 @@ module map_renderer_tb;
         display_frame_start;
         // After reset the default viewpoint must be restored.
         check_frame(0);
-        $display("PASS: 96-column reference; pixel colours/depth; snapshot; two banks; boundary swap; reset/restart");
+        $display("PASS: 96-column cosine reference; flat wall; pixel colours/depth; snapshot; two banks; boundary swap; reset/restart");
         $finish;
     end
-    initial begin #5000000; $fatal(1,"Renderer simulation timeout"); end
+    initial begin #8000000; $fatal(1,"Renderer simulation timeout"); end
 endmodule

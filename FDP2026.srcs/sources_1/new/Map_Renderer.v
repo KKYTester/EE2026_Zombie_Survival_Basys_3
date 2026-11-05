@@ -14,7 +14,7 @@ module Map_Renderer #(
     input wire display_clk, frame_begin,
     input wire [12:0] pixel_index,
     output reg [15:0] pixel_data,
-    output wire [9:0] column_depth
+    output wire [9:0] column_depth // perpendicular depth, in 1/32-cell units
 );
     localparam integer GAME_CYCLES = (CLK_HZ + GAME_HZ/2) / GAME_HZ;
     localparam integer PIXEL_CYCLES = (CLK_HZ + PIXEL_UPDATE_HZ/2) / PIXEL_UPDATE_HZ;
@@ -81,14 +81,15 @@ module Map_Renderer #(
     wire [9:0] ray_angle = frame_angle + column_offset(column);
     wire ray_done, ray_hit, ray_busy;
     wire [6:0] ray_height;
-    wire [9:0] ray_distance;
+    wire [9:0] ray_depth;
     wire ray_start = state == LAUNCH;
     wire [7:0] write_index = (write_bank ? 8'd96 : 8'd0) + {1'b0,column};
     Ray_Caster #(.MAP(MAP)) raycaster (
         .clk(clk), .reset(reset), .start(ray_start),
         .player_x(frame_x), .player_y(frame_y), .angle(ray_angle),
+        .projection_cosine(column_cosine(column)),
         .busy(ray_busy), .done(ray_done), .hit(ray_hit),
-        .height(ray_height), .distance_steps(ray_distance)
+        .height(ray_height), .distance_steps(), .depth_steps(ray_depth)
     );
     always @(posedge clk) begin
         if (reset) begin
@@ -111,7 +112,7 @@ module Map_Renderer #(
                 LAUNCH: state <= WAIT_RAY;
                 WAIT_RAY: if (ray_done) begin
                     heights[write_index] <= ray_height;
-                    depths[write_index] <= ray_distance;
+                    depths[write_index] <= ray_depth;
                     if (column == 7'd95) state <= PUBLISH;
                     else begin
                         column <= column + 1'b1;

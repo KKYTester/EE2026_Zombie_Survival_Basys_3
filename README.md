@@ -171,16 +171,31 @@ quarter-wave sine lookup table, then advances by approximately 1/32 cell per
 cycle using additions. Each direction component is rounded to 1/4096 cell.
 It checks the starting cell and every subsequent sample, stopping at the first
 wall, an out-of-map coordinate, or 768 steps (24 cells). `done` pulses for one
-cycle; `hit` distinguishes walls from an unsuccessful traversal. A ROM supplies
-`min(64, floor(2048/steps))`, including height 64 for zero distance. All division
-in this ROM's initialization is constant elaboration work, not a runtime divider.
-No wall returns height 0 and distance sentinel 1023. A wall at zero distance
-returns distance 0 and height 64.
+cycle; `hit` distinguishes walls from an unsuccessful traversal.
+
+Wall projection corrects fisheye distortion using perpendicular camera depth:
+`depth = raw_distance * cos(ray_angle - view_angle)`. `Map_Renderer` supplies
+each column's cosine from a generated 96-entry table in `Ray_Tables.vh`.
+The factor is unsigned Q1.12 (`4096` = 1), rounded to the nearest 1/4096;
+the ray engine snapshots it on `start`, clamps factors above 4096 to unity,
+then rounds the product back to the nearest 1/32-cell depth step using
+`(distance_steps * projection_cosine + 2048) >> 12`. One extra clock cycle
+per wall hit separates multiplication from the height lookup. There is no
+runtime trigonometry or division. `distance_steps` retains raw ray length;
+`depth_steps` supplies corrected camera depth. A ROM supplies
+`min(64, floor(2048/depth_steps))`, including height 64 for depths 0..32.
+All division in this ROM's initialization is constant elaboration work.
+No wall returns height 0 and sentinel 1023 for both distances. A wall at zero
+distance returns both distances 0 and height 64.
 
 `Map_Renderer.v` snapshots the player once per scan and casts 96 rays spanning
-angle offsets -85 to +85 (~59.77 degrees). This deliberately keeps the proposed
-`64/distance` projection, equal angular spacing, and fisheye distortion. Walls
-are vertically centred in the 64-pixel display. Fixed stepping can miss a wall
+angle offsets -85 to +85 (~59.77 degrees). Wall height uses `64/camera_depth`,
+so a flat wall facing the player has a consistent height across the screen.
+Cosine depends only on the column offset, so view-angle wraparound needs no
+special correction. Walls are vertically centred in the 64-pixel display.
+Equal angular column spacing is retained; a rectilinear camera-plane sampling
+scheme would additionally improve horizontal perspective. Fixed stepping and
+rounded direction components can cause small depth errors and can miss a wall
 cell grazed near a corner; grid DDA is a future replacement if needed.
 
 Rendering reuses one ray engine. A worst-case full scan takes less than 75,000
@@ -192,12 +207,13 @@ is needed for this prototype. The retained `pixel_tick` defaults to
 `Player_Controller` begins an update on `game_tick`; `Player` commits its
 collision-checked increments five board clocks later.
 
-Two banks each store 96 heights (7 bits each) and 96 raw ray distances (10 bits
+Two banks each store 96 heights (7 bits each) and 96 corrected camera depths (10 bits
 each), totalling 3,264 bits before synthesis optimization. The height lookup is
 1,024 by 7 bits; direction and column-angle tables are small constants. No full
 RGB framebuffer is needed. Unused depth storage may be removed by synthesis
-until a sprite renderer consumes `column_depth` (units of 1/32 cell; no fisheye
-correction). Pixel coordinates use the OLED's row-major `pixel_index`.
+until a sprite renderer consumes `column_depth` (perpendicular depth in units
+of 1/32 cell, sentinel 1023 for no hit). Sprite depths must use this same camera
+depth convention for occlusion. Pixel coordinates use the OLED's row-major `pixel_index`.
 
 The renderer writes only the back bank and freezes it after publishing a toggle.
 Two-register synchronizers carry publication and acknowledgement between board
@@ -233,12 +249,15 @@ The runner generates numerical references with Python's standard library, then
 uses Vivado's `xvlog`, `xelab`, and `xsim`. It requires both process success and
 an explicit `PASS` from each simulation. Generated outputs stay under `build/`.
 
-- `ray_caster_tb`: 1,308 reference rays, including every angle, random walkable
+- `ray_caster_tb`: 1,800 reference rays, including every angle, random interior
   positions, cardinal rays with zero direction components, wall/edge starts,
   negative/out-of-map positions, zero distance, an interior wall occluding the
-  boundary wall, traversal cap, input snapshot, and mid-ray reset.
+  boundary wall, traversal cap, input snapshot, and mid-ray reset. Tests cover
+  every column cosine at five headings (including wraparound), unity and zero
+  factors, factor clamping, corrected depth/height, and no-hit sentinels.
 - `map_renderer_tb`: all 96 heights/depths and all 6,144 pixels against numerical
-  references for two viewpoints, player changes during a scan, no premature bank
+  references for three viewpoints, including a flat wall with height 18 in every
+  column and at most one step of depth variation, player changes during a scan, no premature bank
   publication, stable front bank during rendering, invalid pixel indices, and
   reset/restart. It exports the first simulated image to
   `build/renderer_checks/prototype.ppm`.
@@ -285,20 +304,22 @@ long button holds. Reconfigure to restore the spawn; BtnC is not connected.
 
 ### Validation
 
-After delta integration, Vivado 2025.2 compiled and elaborated the mixed
-Verilog/VHDL design. `player_controller_tb`, `mouse_top_tb`, and the isolated
-`mouse_delta_tb` reported `PASS`, including 16,384 movement reference cases,
-all signed deltas, multi-turn wraparound, and packet retention during updates.
-The other four renderer regressions passed before this integration and were
-not rerun for this change.
+After cosine correction, Vivado 2025.2 compiled and elaborated the mixed
+Verilog/VHDL design. All six tests in `run_renderer_checks.ps1` reported `PASS`,
+including 1,800 ray references, three corrected frames, flat-wall projection,
+16,384 movement references, mouse integration, frame publication, reset, and
+actual OLED SPI colour loads. The isolated `mouse_delta_tb` passed during
+the earlier delta integration and was not rerun for this rendering change.
 Synthesis and full placement/routing completed for `xc7a35tcpg236-1`. The final
-design uses 1,304 LUTs (6.27%), 861 flip-flops (2.07%), one RAMB18, and no DSPs.
-Routed setup slack is +0.182 ns and hold slack is +0.065 ns, with no failing
-endpoints, no unconstrained internal endpoints, and no DRC violations.
-No bitstream was generated or board programmed for the delta integration.
-Any existing `build/renderer_hardware/My_Top_Module.bit` may contain the earlier
-absolute-position design; regenerate it from the updated routed checkpoint
-using the command above before programming and checking continuous turning.
+design uses 1,319 LUTs (6.34%), 874 flip-flops (2.10%), two RAMB18s, and one DSP.
+Routed setup slack is +0.682 ns and hold slack is +0.024 ns, with no failing
+endpoints, no unconstrained internal endpoints, and no DRC errors. DRC reports
+three DSP pipeline recommendations (`DPIP-1`, `DPOP-1`, `DPOP-2`); the inferred
+multiplier meets the constrained 100 MHz timing with the current staging.
+No bitstream was generated or board programmed for the cosine correction.
+Any existing `build/renderer_hardware/My_Top_Module.bit` predates this change;
+regenerate it from the updated routed checkpoint using the command above
+before programming and checking the corrected wall projection on the board.
 Synthesis warnings include unused high state-port bits, the unused pixel-enable
 counter, constant output pins, and the existing OLED zero-width replication.
 
