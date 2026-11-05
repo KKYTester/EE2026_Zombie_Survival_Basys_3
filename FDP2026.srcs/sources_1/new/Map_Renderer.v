@@ -39,8 +39,19 @@ module Map_Renderer #(
     // Bundled-data handshake: writer freezes a complete bank until display
     // acknowledges its publication. The display swaps only at frame_begin.
     // The other bank cannot be written until that acknowledgement returns.
-    reg [6:0] heights [0:191];
+    reg [5:0] wall_tops [0:191];
+    reg [6:0] wall_bottoms [0:191];
     reg [9:0] depths [0:191];
+    reg [4:0] wall_greys [0:191];
+    // One RGB565 grey level per two cells (64 perpendicular depth steps),
+    // capped at seven: 0xbdf7 nearby, 0x8430 (~70% brightness) far away.
+    function [4:0] grey_from_depth(input [9:0] camera_depth);
+        reg [3:0] fade;
+        begin
+            fade = camera_depth[9:6] > 4'd7 ? 4'd7 : camera_depth[9:6];
+            grey_from_depth = 5'd23 - {1'b0, fade};
+        end
+    endfunction
     reg write_bank, request_toggle;
     reg front_bank, acknowledge_toggle, display_valid;
     (* ASYNC_REG = "TRUE" *) reg request_meta, request_sync;
@@ -82,6 +93,8 @@ module Map_Renderer #(
     wire ray_done, ray_hit, ray_busy;
     wire [6:0] ray_height;
     wire [9:0] ray_depth;
+    wire [6:0] ray_top = (7'd64 - ray_height) >> 1;
+    wire [6:0] ray_bottom = ray_top + ray_height;
     wire ray_start = state == LAUNCH;
     wire [7:0] write_index = (write_bank ? 8'd96 : 8'd0) + {1'b0,column};
     Ray_Caster #(.MAP(MAP)) raycaster (
@@ -111,8 +124,10 @@ module Map_Renderer #(
                 end
                 LAUNCH: state <= WAIT_RAY;
                 WAIT_RAY: if (ray_done) begin
-                    heights[write_index] <= ray_height;
+                    wall_tops[write_index] <= ray_top[5:0];
+                    wall_bottoms[write_index] <= ray_bottom;
                     depths[write_index] <= ray_depth;
+                    wall_greys[write_index] <= grey_from_depth(ray_depth);
                     if (column == 7'd95) state <= PUBLISH;
                     else begin
                         column <= column + 1'b1;
@@ -139,15 +154,18 @@ module Map_Renderer #(
     wire [12:0] pixel_y_full = pixel_index / 13'd96;
     wire [7:0] read_index = (front_bank ? 8'd96 : 8'd0) + {1'b0,pixel_x_full[6:0]};
     wire valid_pixel = pixel_index < 13'd6144;
-    wire [6:0] wall_height = heights[read_index];
-    wire [6:0] wall_top = (7'd64 - wall_height) >> 1;
-    wire [6:0] wall_bottom = wall_top + wall_height;
+    // Cache projection bounds with the shade so pixel lookup only compares.
+    wire [6:0] wall_top = {1'b0, wall_tops[read_index]};
+    wire [6:0] wall_bottom = wall_bottoms[read_index];
     assign column_depth = display_valid && valid_pixel ? depths[read_index] : 10'h3ff;
+    // Shade is computed once per ray, keeping arithmetic off the OLED path.
+    wire [4:0] wall_grey = wall_greys[read_index];
+    wire [15:0] wall_colour = {wall_grey, wall_grey, 1'b1, wall_grey};
     always @* begin
         pixel_data = 16'h0000;
         if (!reset && display_valid && valid_pixel) begin
             if (pixel_y_full < wall_top) pixel_data = 16'h18e7; // ceiling
-            else if (pixel_y_full < wall_bottom) pixel_data = 16'hbdf7; // wall
+            else if (pixel_y_full < wall_bottom) pixel_data = wall_colour;
             else pixel_data = 16'h3184; // floor
         end
     end

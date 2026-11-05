@@ -16,6 +16,15 @@ module map_renderer_tb;
     reg [16:0] expected;
     reg [15:0] expected_color;
     reg [7:0] r,g,b;
+    function [15:0] shaded_wall(input integer camera_depth);
+        integer fade, grey;
+        begin
+            fade=camera_depth/64;
+            if (fade>7) fade=7;
+            grey=23-fade;
+            shaded_wall=(grey<<11) | ((2*grey+1)<<5) | grey;
+        end
+    endfunction
     task display_frame_start;
         begin
             @(negedge display_clk); frame_begin=1;
@@ -32,7 +41,7 @@ module map_renderer_tb;
                 h=expected[6:0]; top=(64-h)/2;
                 if (which==2 && (h!=18 || depth<112 || depth>113))
                     $fatal(1,"Flat wall curved at column %0d",c);
-                expected_color=row<top ? 16'h18e7 : row<top+h ? 16'hbdf7 : 16'h3184;
+                expected_color=row<top ? 16'h18e7 : row<top+h ? shaded_wall(expected[16:7]) : 16'h3184;
                 if (pixel_data !== expected_color || depth !== expected[16:7])
                     $fatal(1,"Frame %0d pixel %0d got %h depth %0d expected %h depth %0d",
                         which,p,pixel_data,depth,expected_color,expected[16:7]);
@@ -45,6 +54,30 @@ module map_renderer_tb;
             end
             pixel_index=8191; #1;
             if (pixel_data !== 0 || depth !== 1023) $fatal(1,"Invalid OLED pixel index");
+        end
+    endtask
+    task check_shading_range;
+        integer d, idx;
+        reg [15:0] previous_color;
+        begin
+            // Exercise the production shade function and column colour lookup
+            // at zero, every fade boundary, the clamp, and all other depths.
+            // Reference frames separately check the actual per-ray bank writes.
+            idx=dut.front_bank ? 96 : 0;
+            pixel_index=32*96;
+            previous_color=16'hffff;
+            for (d=0;d<1024;d=d+1) begin
+                dut.wall_greys[idx]=dut.grey_from_depth(d);
+                #1;
+                if (pixel_data !== shaded_wall(d) || pixel_data > previous_color)
+                    $fatal(1,"Distance shade failed at depth %0d: %h",d,pixel_data);
+                previous_color=pixel_data;
+            end
+            // A no-hit column must still show ceiling/floor, never a wall.
+            dut.wall_tops[idx]=32;
+            dut.wall_bottoms[idx]=32;
+            #1;
+            if (pixel_data !== 16'h3184) $fatal(1,"No-hit column shaded as wall");
         end
     endtask
     initial begin
@@ -87,6 +120,7 @@ module map_renderer_tb;
         repeat (5) @(negedge display_clk);
         display_frame_start;
         check_frame(2);
+        check_shading_range;
         x_coord=32'd34816; y_coord=32'd34816; theta=32'd128;
         @(negedge display_clk); reset=1;
         repeat (3) @(negedge display_clk);
@@ -102,7 +136,7 @@ module map_renderer_tb;
         display_frame_start;
         // After reset the default viewpoint must be restored.
         check_frame(0);
-        $display("PASS: 96-column cosine reference; flat wall; pixel colours/depth; snapshot; two banks; boundary swap; reset/restart");
+        $display("PASS: 96-column cosine reference; flat wall; distance shading at all 1024 depths; pixel colours/depth; snapshot; two banks; boundary swap; reset/restart");
         $finish;
     end
     initial begin #8000000; $fatal(1,"Renderer simulation timeout"); end

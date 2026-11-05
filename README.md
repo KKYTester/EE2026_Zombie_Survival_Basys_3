@@ -193,6 +193,17 @@ angle offsets -85 to +85 (~59.77 degrees). Wall height uses `64/camera_depth`,
 so a flat wall facing the player has a consistent height across the screen.
 Cosine depends only on the column offset, so view-angle wraparound needs no
 special correction. Walls are vertically centred in the 64-pixel display.
+
+Wall columns fade slightly with this same perpendicular depth, so equal-depth
+walls have equal brightness across the view. RGB565 red/blue intensity is
+`23 - min(7, floor(depth_steps/64))`; green is twice that value plus one.
+This retains the original `0xbdf7` within two cells and darkens by one grey
+level every two cells, stopping at `0x8430` at 14 cells (about 70% brightness).
+The fade uses shifts, a clamp, and subtraction once per ray. Its shade is stored
+with the completed column to keep arithmetic off the OLED colour path;
+ceiling/floor colours are unchanged. Wall top/bottom rows are also computed
+once per ray, so pixel lookup only reads column data and compares row bounds.
+
 Equal angular column spacing is retained; a rectilinear camera-plane sampling
 scheme would additionally improve horizontal perspective. Fixed stepping and
 rounded direction components can cause small depth errors and can miss a wall
@@ -207,11 +218,13 @@ is needed for this prototype. The retained `pixel_tick` defaults to
 `Player_Controller` begins an update on `game_tick`; `Player` commits its
 collision-checked increments five board clocks later.
 
-Two banks each store 96 heights (7 bits each) and 96 corrected camera depths (10 bits
-each), totalling 3,264 bits before synthesis optimization. The height lookup is
+Two banks each store 96 top rows (6 bits each), 96 bottom rows (7 bits each),
+96 corrected camera depths (10 bits each), and 96 grey levels (5 bits each),
+totalling 5,376 bits before synthesis optimization. Only three grey bits vary.
+The height lookup is
 1,024 by 7 bits; direction and column-angle tables are small constants. No full
-RGB framebuffer is needed. Unused depth storage may be removed by synthesis
-until a sprite renderer consumes `column_depth` (perpendicular depth in units
+RGB framebuffer is needed. Unused depth storage may be removed until a sprite renderer consumes
+`column_depth` (perpendicular depth in units
 of 1/32 cell, sentinel 1023 for no hit). Sprite depths must use this same camera
 depth convention for occlusion. Pixel coordinates use the OLED's row-major `pixel_index`.
 
@@ -259,7 +272,9 @@ an explicit `PASS` from each simulation. Generated outputs stay under `build/`.
   references for three viewpoints, including a flat wall with height 18 in every
   column and at most one step of depth variation, player changes during a scan, no premature bank
   publication, stable front bank during rendering, invalid pixel indices, and
-  reset/restart. It exports the first simulated image to
+  reset/restart. Distance shading is also checked across all 1,024 depth values,
+  including fade boundaries, the minimum-brightness clamp, and no-hit columns.
+  It exports the first simulated image to
   `build/renderer_checks/prototype.ppm`.
 - `clock_enable_tb`: player/enable/startup-reset regression and existing 25 MHz
   parameter default. Checks the player stays at spawn without input across two
@@ -304,22 +319,27 @@ long button holds. Reconfigure to restore the spawn; BtnC is not connected.
 
 ### Validation
 
-After cosine correction, Vivado 2025.2 compiled and elaborated the mixed
-Verilog/VHDL design. All six tests in `run_renderer_checks.ps1` reported `PASS`,
+For distance shading, Vivado 2025.2 compiled and elaborated the mixed
+Verilog/VHDL design. The two affected tests, `map_renderer_tb` and
+`oled_renderer_tb`, reported `PASS`: all 1,024 depth encodings, three reference
+frames, frame publication/reset, and actual shaded OLED SPI colour loads.
+The other four renderer-runner tests were not rerun for this shading change.
+Before distance shading, all six tests in `run_renderer_checks.ps1` passed,
 including 1,800 ray references, three corrected frames, flat-wall projection,
 16,384 movement references, mouse integration, frame publication, reset, and
 actual OLED SPI colour loads. The isolated `mouse_delta_tb` passed during
-the earlier delta integration and was not rerun for this rendering change.
+the earlier delta integration and was not rerun for distance shading.
+
 Synthesis and full placement/routing completed for `xc7a35tcpg236-1`. The final
-design uses 1,319 LUTs (6.34%), 874 flip-flops (2.10%), two RAMB18s, and one DSP.
-Routed setup slack is +0.682 ns and hold slack is +0.024 ns, with no failing
+design uses 1,369 LUTs (6.58%), 878 flip-flops (2.11%), two RAMB18s, and one DSP.
+Routed setup slack is +0.800 ns and hold slack is +0.061 ns, with no failing
 endpoints, no unconstrained internal endpoints, and no DRC errors. DRC reports
 three DSP pipeline recommendations (`DPIP-1`, `DPOP-1`, `DPOP-2`); the inferred
 multiplier meets the constrained 100 MHz timing with the current staging.
-No bitstream was generated or board programmed for the cosine correction.
+No bitstream was generated or board programmed for distance shading.
 Any existing `build/renderer_hardware/My_Top_Module.bit` predates this change;
 regenerate it from the updated routed checkpoint using the command above
-before programming and checking the corrected wall projection on the board.
+before programming and checking the shaded walls on the board.
 Synthesis warnings include unused high state-port bits, the unused pixel-enable
 counter, constant output pins, and the existing OLED zero-width replication.
 
