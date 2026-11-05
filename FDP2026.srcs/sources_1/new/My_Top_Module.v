@@ -98,7 +98,10 @@ module My_Top_Module #(
         .published_map(published_map),.map_ready(map_ready),.map_busy(map_busy),
         .p1_addr(p1_addr),.p2_addr(p2_addr),.active_seed(),.error_code(),
         .game_state(game_state),.play_start(play_start),.wave(),.health(),
-        .player_tile(player_tile),.world_pixel(world_pixel),
+        .player_tile(player_tile),
+        // Minimap marker: 4.4 tiles, y down (16 - y north); angle 0 = north, clockwise.
+        .player_pos_x(player_x[15:8]),.player_pos_y(8'd0 - player_y[15:8]),.player_angle(player_angle[9:0]),
+        .world_pixel(world_pixel),
         .pixel_x(pixel_x),.pixel_y(pixel_y),.frame_begin(frame_begin),.frame_idle(frame_idle),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.occupied(occupied),
         .player_hit(test_hit),.spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_busy(),

@@ -42,7 +42,12 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     output wire [2:0] game_state, output wire play_start,
     output wire [6:0] wave, output wire [1:0] health,
     // Player (Member 1)
-    input wire [7:0] player_tile,
+    input wire [7:0] player_tile,                 // {y,x} tile the player stands on
+    // Player position for the minimap: tiles with 4 fractional bits, y down
+    // (same orientation as the map rows); angle 1024 units per turn, 0 = up,
+    // clockwise. {player_pos_y[7:4], player_pos_x[7:4]} should equal player_tile.
+    input wire [7:0] player_pos_x, input wire [7:0] player_pos_y,
+    input wire [9:0] player_angle,
     // Display (Members 1 and 2)
     input wire [15:0] world_pixel,
     output wire [6:0] pixel_x, output wire [5:0] pixel_y,
@@ -191,7 +196,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     assign frame_idle = !sending_pixels && !oled_frame_begin;
 
     reg [255:0] frame_map;
-    reg [7:0] frame_p1,frame_p2;
+    reg [7:0] frame_p1,frame_p2,frame_pos_x,frame_pos_y;
+    reg [9:0] frame_angle;
     reg [15:0] frame_seed;
     reg [1:0] frame_health;
     reg [6:0] frame_wave,frame_remaining;
@@ -211,6 +217,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     always @(posedge oled_clk) begin
         if(oled_reset) begin
             frame_map<={256{1'b1}}; frame_p1<=0; frame_p2<=0; frame_seed<=0;
+            frame_pos_x<=0; frame_pos_y<=0; frame_angle<=0;
             frame_health<=3; frame_wave<=1; frame_remaining<=0; frame_zombies<=0;
             frame_flash<=0; frame_recoil<=0; frame_reloading<=0; frame_ammo<=6; frame_drop<=0;
             frame_ready<=0; frame_busy<=1; frame_mode<=0; frame_error<=0;
@@ -219,6 +226,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
             frame_tint<=0; frame_blink<=0; frame_over_ready<=0;
         end else if(oled_frame_begin) begin
             frame_map<=published_map; frame_p1<=playing_now ? player_tile : p1_addr; frame_p2<=p2_addr;
+            frame_pos_x<=player_pos_x; frame_pos_y<=player_pos_y; frame_angle<=player_angle;
             frame_health<=health; frame_wave<=wave;
             frame_remaining<=remaining; frame_zombies<=zombies;
             frame_flash<=weapon_flash; frame_recoil<=weapon_recoil;
@@ -237,6 +245,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .px(px),.py(py),.world_pixel(world_now),
         .game_state(frame_screen),.minimap_mode(frame_mode),
         .map_bits(frame_map),.p1_addr(frame_p1),.p2_addr(frame_p2),.seed(frame_seed),
+        .player_x(frame_pos_x),.player_y(frame_pos_y),.player_angle(frame_angle),
         .map_ready(frame_ready),.map_busy(frame_busy),.error_code(frame_error),
         .health(frame_health),.low_blink(frame_blink),.wave(frame_wave),.remaining(frame_remaining),
         .zombie_tiles(frame_zombies),.tint(frame_tint),
@@ -250,6 +259,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .px(7'd95),.py(6'd63),.world_pixel(world_last),
         .game_state(frame_screen),.minimap_mode(frame_mode),
         .map_bits(frame_map),.p1_addr(frame_p1),.p2_addr(frame_p2),.seed(frame_seed),
+        .player_x(frame_pos_x),.player_y(frame_pos_y),.player_angle(frame_angle),
         .map_ready(frame_ready),.map_busy(frame_busy),.error_code(frame_error),
         .health(frame_health),.low_blink(frame_blink),.wave(frame_wave),.remaining(frame_remaining),
         .zombie_tiles(frame_zombies),.tint(frame_tint),

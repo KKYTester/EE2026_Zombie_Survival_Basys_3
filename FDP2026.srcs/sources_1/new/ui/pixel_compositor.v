@@ -12,6 +12,8 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
     // Map snapshot and status.
     input wire [255:0] map_bits,
     input wire [7:0] p1_addr, input wire [7:0] p2_addr,
+    // Player marker: 4.4 tiles, y down; angle 1024 per turn, 0 = up, clockwise.
+    input wire [7:0] player_x, input wire [7:0] player_y, input wire [9:0] player_angle,
     input wire [15:0] seed,
     input wire map_ready, input wire map_busy, input wire [2:0] error_code,
     // Gameplay HUD and effects.
@@ -40,7 +42,8 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
         .reloading(weapon_reloading),.pixel_in(hud_pixel_data),.pixel_out(ammo_pixel_data));
     map_display_mux display_mux(.px(px),.py(py),.minimap_mode(minimap_mode),
         .fp_pixel_data(ammo_pixel_data),.map_bits(map_bits),.p1_addr(p1_addr),
-        .p2_addr(p2_addr),.seed(seed),.map_ready(map_ready),
+        .p2_addr(p2_addr),.player_x(player_x),.player_y(player_y),.player_angle(player_angle),
+        .seed(seed),.map_ready(map_ready),
         // Player 2's yellow tile only in a 2P game: game_flow clears menu_sel
         // when 1P starts, and it can only be 1 when ENABLE_2P is set.
         .show_p2(ENABLE_2P!=0 && menu_sel),

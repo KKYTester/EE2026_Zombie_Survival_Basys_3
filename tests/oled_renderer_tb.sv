@@ -30,6 +30,7 @@ module oled_renderer_tb;
         .px(px),.py(py),.world_pixel(reference_world),
         .game_state(board.game.frame_screen),.minimap_mode(board.game.frame_mode),
         .map_bits(board.game.frame_map),.p1_addr(board.game.frame_p1),.p2_addr(board.game.frame_p2),
+        .player_x(board.game.frame_pos_x),.player_y(board.game.frame_pos_y),.player_angle(board.game.frame_angle),
         .seed(board.game.frame_seed),.map_ready(board.game.frame_ready),.map_busy(board.game.frame_busy),
         .error_code(board.game.frame_error),.health(board.game.frame_health),.low_blink(board.game.frame_blink),
         .wave(board.game.frame_wave),.remaining(board.game.frame_remaining),.zombie_tiles(board.game.frame_zombies),
