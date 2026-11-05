@@ -9,7 +9,7 @@ set out_dir [file join $root_dir build renderer_hardware]
 file mkdir $out_dir
 cd $out_dir
 set source_dir [file join $root_dir FDP2026.srcs sources_1 new]
-foreach source {Clk_Divider.v Oled_Display.v Player.v Button_Debounce.v Player_Controller.v Ray_Caster.v Map_Renderer.v My_Top_Module.v} {
+foreach source {Clk_Divider.v Oled_Display.v player_state/Player.v Button_Debounce.v player_state/Player_Controller.v map_renderer/Ray_Caster.v map_renderer/Map_Renderer.v My_Top_Module.v} {
     read_verilog [list [file join $source_dir $source]]
 }
 foreach source {Ps2Interface.vhd Mouse_Control_Delta.vhd} {

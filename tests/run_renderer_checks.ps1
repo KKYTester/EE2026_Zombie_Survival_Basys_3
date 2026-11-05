@@ -9,8 +9,8 @@ $outputDir = Join-Path $repoRoot 'build/renderer_checks'
 $sourceDir = Join-Path $repoRoot 'FDP2026.srcs/sources_1/new'
 & python (Join-Path $PSScriptRoot 'generate_ray_vectors.py')
 if ($LASTEXITCODE -ne 0) { throw 'Reference generation failed' }
-$sources = @(Get-ChildItem -LiteralPath $sourceDir -Filter '*.v' | ForEach-Object { $_.FullName })
-$vhdlSources = @(Get-ChildItem -LiteralPath $sourceDir -Filter '*.vhd' | ForEach-Object { $_.FullName })
+$sources = @(Get-ChildItem -LiteralPath $sourceDir -Recurse -File -Filter '*.v' | ForEach-Object { $_.FullName })
+$vhdlSources = @(Get-ChildItem -LiteralPath $sourceDir -Recurse -File -Filter '*.vhd' | ForEach-Object { $_.FullName })
 $testNames = $Tests
 $testFiles = @($testNames | ForEach-Object { Join-Path $PSScriptRoot "${_}.sv" })
 Push-Location -LiteralPath $outputDir

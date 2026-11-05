@@ -56,6 +56,19 @@ An already-open project does not automatically refresh when files appear on disk
 Use Vivado's **Add Sources** to add new files to your existing project, or
 regenerate the project using the steps above. Keep simulation-only testbenches
 outside this design-source folder.
+
+Design sources under `FDP2026.srcs/sources_1/new/` are grouped as follows:
+
+- `map_renderer/`: `Map_Renderer.v` and `Ray_Caster.v`.
+- `player_state/`: `Player.v` and `Player_Controller.v`.
+- The source root holds the top module, peripheral modules, and shared headers.
+  `Game_Config.vh` and `Ray_Tables.vh` are used by both groups.
+
+After pulling this reorganization, remove the four old source paths from an
+existing Vivado project and add the files from these subfolders, or regenerate
+the project using the steps above. The simulation runner discovers sources
+recursively, and the hardware validation script uses the grouped paths.
+
 ## First-person movement prototype
 
 The OLED now displays a first-person view of the fixed, enclosed 16 by 16 room:
