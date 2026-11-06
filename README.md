@@ -133,7 +133,12 @@ the actual player pose at the camera angle. The first zombie before a wall takes
 one damage, and three hits kill it. Adjacent zombies share a one-second player
 damage cooldown. Enemies move at up to one tile per second in 32 fractional
 updates, rotating slot priority while following the live player's shared BFS
-field. Sprites and minimap dots use the fractional positions. A trip reserves
+field. Fractional movement steers toward a point 0.25 tile ahead along the
+planned center-to-center path (`enemy_manager.LOOKAHEAD`, in coordinate units).
+Both direction components blend near turns; a blocked lookahead segment falls
+back to the current waypoint. Its next tile is reserved before steering begins,
+and every proposed substep must remain on the current segment's floor tiles.
+The proportional steering can slow movement at corners. Sprites and minimap dots use the fractional positions. A trip reserves
 both endpoint tiles until arrival. Shots intersect circles at the actual fractional
 positions, using `enemy_manager.HIT_RADIUS` (in coordinate fixed-point units),
 which defaults to 0.25 tile. The first circle intersection takes damage; walls
