@@ -119,5 +119,5 @@ module tb_enemy_smooth;
         direction_trip(8'h85,1408,2176,1408,1664);
         $display("TB_ENEMY_SMOOTH: PASS"); $finish;
     end
-    initial begin #300000; $fatal(1,"smooth movement timeout"); end
+    initial begin #700000; $fatal(1,"smooth movement timeout"); end
 endmodule

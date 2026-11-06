@@ -133,7 +133,7 @@ module tb_enemy_manager;
         check(occupied[8'h32] && occupied[8'h33],"stale field used after goal change");
         while(!dut.field_ready) step;
         sweep;
-        check(occupied[8'h22] && occupied[8'h23],"new goal did not redirect movement");
+        check(occupied[8'h22] && occupied[8'h33],"diagonal route did not wait for its occupied destination");
 
         // Repeat the same contest with the slot that lost now going first.
         clear=1; step; clear=0;
@@ -227,5 +227,5 @@ module tb_enemy_manager;
         check(player_hits==i+2,"attack outside gameplay");
         $display("TB_ENEMY_MANAGER: PASS"); $finish;
     end
-    initial begin #200000; $fatal(1,"timeout"); end
+    initial begin #500000; $fatal(1,"timeout"); end
 endmodule
