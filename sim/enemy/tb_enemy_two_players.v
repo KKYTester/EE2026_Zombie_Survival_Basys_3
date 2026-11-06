@@ -16,7 +16,7 @@ module tb_enemy_two_players;
         if(hurt1) hurt_count1=hurt_count1+1;
         if(hurt2) hurt_count2=hurt_count2+1;
     end
-    enemy_manager #(.TWO_PLAYERS(1),.INITIAL_HP(2),.ATTACK_COOLDOWN_CYCLES(64)) dut(
+    enemy_manager #(.MOVE_SUBSTEPS(1),.TWO_PLAYERS(1),.INITIAL_HP(2),.ATTACK_COOLDOWN_CYCLES(64)) dut(
         .clk(clk),.rst(1'b0),.clear(clear),.playing(1'b1),.map_ready(1'b1),
         .map_bits(walls),.spawn_req(req),.spawn_tile(spawn_tile),.debug_defeat(1'b0),
         .move_tick(tick),.spawn_busy(1'b0),.player_tile(p1),.player2_tile(p2),

@@ -22,7 +22,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     parameter TINT_SHIFT=25, parameter BLINK_SHIFT=24,
     parameter SPAWN_SHIFT=26, parameter CLEAR_SHIFT=27,
     parameter FLASH_SHIFT=22, parameter RECOIL_SHIFT=23, parameter RELOAD_SHIFT=25,
-    parameter WIN_WAVE=10)(
+    parameter WIN_WAVE=10, parameter USE_SPAWN_OCCUPANCY=0, parameter FRACTIONAL_ENEMIES=0)(
     input wire clk, input wire rst,
     // Board
     input wire btn_c,                             // raw button, debounced here
@@ -56,6 +56,9 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     // Enemies and combat (Member 2)
     input wire spawn_ack, input wire enemy_defeated,
     input wire [255:0] occupied, input wire player_hit,
+    input wire [255:0] spawn_occupied,
+    input wire [7:0] zombie_active,
+    input wire [95:0] zombie_x, zombie_y,
     output wire spawn_req, output wire [7:0] spawn_tile, output wire spawn_busy,
     output wire enemies_clear, output wire shot_fired);
 
@@ -121,7 +124,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .playing(playing_now),.hit(player_hit),.health(health),.damage(damage));
     wave_controller #(.SPAWN_SHIFT(SPAWN_SHIFT),.CLEAR_SHIFT(CLEAR_SHIFT),.WIN_WAVE(WIN_WAVE)) waves(
         .clk(clk),.rst(rst),.play_start(play_start),.playing(playing_now),
-        .map_bits(published_map),.occupied(zombies),.player_tile(player_tile),
+        .map_bits(published_map),.occupied(USE_SPAWN_OCCUPANCY ? spawn_occupied : zombies),
+        .player_tile(player_tile),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.wave(wave),
         .spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_busy(spawn_busy),.alive(alive),
         .remaining(remaining),.wave_clear(wave_clear),.game_won(game_won));
@@ -202,6 +206,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     reg [1:0] frame_health;
     reg [6:0] frame_wave,frame_remaining;
     reg [255:0] frame_zombies;
+    reg [7:0] frame_zombie_active;
+    reg [95:0] frame_zombie_x, frame_zombie_y;
     reg frame_flash,frame_recoil,frame_reloading;
     reg [2:0] frame_ammo;
     reg [4:0] frame_drop;
@@ -219,6 +225,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
             frame_map<={256{1'b1}}; frame_p1<=0; frame_p2<=0; frame_seed<=0;
             frame_pos_x<=0; frame_pos_y<=0; frame_angle<=0;
             frame_health<=3; frame_wave<=1; frame_remaining<=0; frame_zombies<=0;
+            frame_zombie_active<=0; frame_zombie_x<=0; frame_zombie_y<=0;
             frame_flash<=0; frame_recoil<=0; frame_reloading<=0; frame_ammo<=6; frame_drop<=0;
             frame_ready<=0; frame_busy<=1; frame_mode<=0; frame_error<=0;
             frame_screen<=0; frame_sel<=0;
@@ -229,6 +236,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
             frame_pos_x<=player_pos_x; frame_pos_y<=player_pos_y; frame_angle<=player_angle;
             frame_health<=health; frame_wave<=wave;
             frame_remaining<=remaining; frame_zombies<=zombies;
+            frame_zombie_active<=zombie_active; frame_zombie_x<=zombie_x; frame_zombie_y<=zombie_y;
             frame_flash<=weapon_flash; frame_recoil<=weapon_recoil;
             frame_reloading<=weapon_reloading; frame_ammo<=ammo; frame_drop<=weapon_drop;
             frame_seed<=seed; frame_ready<=ready; frame_busy<=busy;
@@ -241,7 +249,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     end
     // One drawing-chain definition, evaluated at the current and final pixels.
     wire [15:0] pixel_data,last_pixel_data;
-    pixel_compositor #(.STAGE(STAGE),.ENABLE_2P(ENABLE_2P),.SHOW_CURSOR(SHOW_CURSOR)) compositor(
+    pixel_compositor #(.STAGE(STAGE),.ENABLE_2P(ENABLE_2P),.SHOW_CURSOR(SHOW_CURSOR),
+        .FRACTIONAL_ENEMIES(FRACTIONAL_ENEMIES)) compositor(
         .px(px),.py(py),.world_pixel(world_now),
         .game_state(frame_screen),.minimap_mode(frame_mode),
         .map_bits(frame_map),.p1_addr(frame_p1),.p2_addr(frame_p2),.seed(frame_seed),
@@ -249,13 +258,15 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .map_ready(frame_ready),.map_busy(frame_busy),.error_code(frame_error),
         .health(frame_health),.low_blink(frame_blink),.wave(frame_wave),.remaining(frame_remaining),
         .zombie_tiles(frame_zombies),.tint(frame_tint),
+        .zombie_active(frame_zombie_active),.zombie_x(frame_zombie_x),.zombie_y(frame_zombie_y),
         .weapon_recoil(frame_recoil),.weapon_flash(frame_flash),.weapon_reloading(frame_reloading),
         .ammo(frame_ammo),.weapon_drop(frame_drop),
         .menu_sel(frame_sel),.cursor_x(frame_cx),.cursor_y(frame_cy),
         .progress(frame_progress),.over_ready(frame_over_ready),.pixel_out(pixel_data));
 
     // The course OLED driver omits (95,63); the bridge sends this same composition.
-    pixel_compositor #(.STAGE(STAGE),.ENABLE_2P(ENABLE_2P),.SHOW_CURSOR(SHOW_CURSOR)) last_pixel_compositor(
+    pixel_compositor #(.STAGE(STAGE),.ENABLE_2P(ENABLE_2P),.SHOW_CURSOR(SHOW_CURSOR),
+        .FRACTIONAL_ENEMIES(FRACTIONAL_ENEMIES)) last_pixel_compositor(
         .px(7'd95),.py(6'd63),.world_pixel(world_last),
         .game_state(frame_screen),.minimap_mode(frame_mode),
         .map_bits(frame_map),.p1_addr(frame_p1),.p2_addr(frame_p2),.seed(frame_seed),
@@ -263,6 +274,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .map_ready(frame_ready),.map_busy(frame_busy),.error_code(frame_error),
         .health(frame_health),.low_blink(frame_blink),.wave(frame_wave),.remaining(frame_remaining),
         .zombie_tiles(frame_zombies),.tint(frame_tint),
+        .zombie_active(frame_zombie_active),.zombie_x(frame_zombie_x),.zombie_y(frame_zombie_y),
         .weapon_recoil(frame_recoil),.weapon_flash(frame_flash),.weapon_reloading(frame_reloading),
         .ammo(frame_ammo),.weapon_drop(frame_drop),
         .menu_sel(frame_sel),.cursor_x(frame_cx),.cursor_y(frame_cy),

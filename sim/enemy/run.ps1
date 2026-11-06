@@ -11,13 +11,15 @@ try {
         "$sourceRoot/enemy/enemy_combat.v" `
         "$sourceRoot/enemy/zombie_renderer.v" "$PSScriptRoot/demo_wall_view.v" `
         "$sourceRoot/map_renderer/Ray_Caster.v" `
+        "$sourceRoot/ui/zombie_overlay.v" `
         "$sourceRoot/game/wave_controller.v" "$sourceRoot/game/spawn_finder.v" `
         "$sourceRoot/game/player_health.v" "$sourceRoot/ui/weapon_ctrl.v" `
         "$sourceRoot/map/lfsr16.v" "$PSScriptRoot/tb_enemy_manager.v" `
         "$PSScriptRoot/tb_enemy_waves.v" "$PSScriptRoot/tb_zombie_renderer.v" `
-        "$PSScriptRoot/tb_enemy_two_players.v" "$PSScriptRoot/tb_camera_enemy.v"
+        "$PSScriptRoot/tb_enemy_two_players.v" "$PSScriptRoot/tb_camera_enemy.v" `
+        "$PSScriptRoot/tb_enemy_smooth.v"
     if ($LASTEXITCODE -ne 0) { throw 'Verilog compilation failed' }
-    foreach ($testTop in @('tb_enemy_manager', 'tb_enemy_waves', 'tb_zombie_renderer', 'tb_enemy_two_players', 'tb_camera_enemy')) {
+    foreach ($testTop in @('tb_enemy_manager', 'tb_enemy_waves', 'tb_zombie_renderer', 'tb_enemy_two_players', 'tb_camera_enemy', 'tb_enemy_smooth')) {
         & "$VivadoBin/xelab.bat" $testTop -s $testTop
         if ($LASTEXITCODE -ne 0) { throw "Elaboration failed: $testTop" }
         $simOutput = & "$VivadoBin/xsim.bat" $testTop -R 2>&1

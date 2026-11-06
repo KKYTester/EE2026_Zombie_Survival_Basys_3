@@ -131,8 +131,17 @@ weapon animation/ammo/reload, damage effects, victory/game-over screens and
 return-to-title behavior are integrated into the game. Accepted shots trace from
 the actual player pose at the camera angle. The first zombie before a wall takes
 one damage, and three hits kill it. Adjacent zombies share a one-second player
-damage cooldown. Enemies move at up to two tile steps per second, rotating slot
-priority while following the live player's shared BFS field.
+damage cooldown. Enemies move at up to one tile per second in 32 fractional
+updates, rotating slot priority while following the live player's shared BFS
+field. Sprites and minimap dots use the fractional positions. A trip reserves
+both endpoint tiles until arrival; the shooting mask tracks the actual tile.
+The spawn selector excludes those reservations. Contact damage uses actual
+player/enemy distance, and enemies stop when within one tile of the player.
+
+`My_Top_Module.MOVE_PERIOD` is the interval between substeps at 100 MHz.
+The default 3,125,000 clocks gives 32 updates per second with
+`enemy_manager.MOVE_SUBSTEPS=32`. One-step mode remains available for the
+earlier tile-movement regression tests.
 
 SW0 hides/shows the map over the first-person scene. The sprite and wall
 renderers snapshot the same pose, prepare the back bank, and publish together.

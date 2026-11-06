@@ -25,7 +25,7 @@ module tb_enemy_manager;
         if(dead) deaths=deaths+1;
         if(player_hit) player_hits=player_hits+1;
     end
-    enemy_manager #(.ATTACK_COOLDOWN_CYCLES(16)) dut(
+    enemy_manager #(.MOVE_SUBSTEPS(1),.ATTACK_COOLDOWN_CYCLES(16)) dut(
         .clk(clk),.rst(rst),.clear(clear),.playing(playing),
         .map_ready(ready),.map_bits(map_bits),.spawn_req(req),.spawn_tile(tile),
         .debug_defeat(defeat),.spawn_ack(ack),.enemy_defeated(dead),
