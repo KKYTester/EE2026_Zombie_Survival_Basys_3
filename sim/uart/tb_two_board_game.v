@@ -1,99 +1,124 @@
 `timescale 1ns / 1ps
-// Two My_Top_Module boards with crossed UART lines (short timings).
-// Checks: link-up, 2P blocked without link, host-started 2P run, identical
-// maps on both boards, Player 2 pose and shots reaching the host, zombies
-// shown on the Player 2 board, and a standalone 1P run on a lone board.
+// Two linked My_Top_Module boards (crossed UART) plus a lone board, short timings.
+// Independent 2-player design: each board runs its own game on the same map.
+//  1. Lone board: 1 PLAYER runs with no link.
+//  2. Both linked boards start 2 PLAYERS at once: exactly one leads, both
+//     play the same map with the same token.
+//  3. Each board spawns its own zombies; partner status crosses the link.
+//  4. Board A dies: A shows GAME OVER while B keeps playing; A returning to
+//     the title does not pull it back into B's run.
+//  5. B dies and returns; A starts 2 PLAYERS alone and B (on its title) joins.
 module tb_two_board_game;
     reg clk=0;
     always #5 clk=~clk;
-    reg host_c=0, host_d=0, cl_c=0, cl_u=0, solo_c=0;
-    wire h_tx, c_tx, solo_tx;
-    tri1 h_ps2c, h_ps2d, c_ps2c, c_ps2d, s_ps2c, s_ps2d;
-    wire [15:0] h_led, c_led, s_led;
+    reg a_c=0, a_d=0, a_hit=0, b_c=0, b_d=0, b_hit=0, s_c=0;
+    reg b_reset=1;   // real boards never start in lockstep
+    wire a_tx, b_tx, s_tx;
+    tri1 a_ps2c, a_ps2d, b_ps2c, b_ps2d, s_ps2c, s_ps2d;
     localparam P_DEB=4, P_GEN=12, P_OVER=12;
 `define BOARD_PARAMS .DEBOUNCE_CYCLES(P_DEB),.GEN_SHIFT(P_GEN),.OVER_SHIFT(P_OVER), \
         .SPAWN_SHIFT(10),.CLEAR_SHIFT(12),.MOVE_PERIOD(20000),.CLK_FREQ(1843200), \
-        .LINK_INPUT_PERIOD(3000),.LINK_STATE_PERIOD(6000),.LINK_HELLO_PERIOD(8000), \
-        .LINK_TIMEOUT(200000)
-    My_Top_Module #(`BOARD_PARAMS) hostb(.clk(clk),.btnC(host_c),.btnU(1'b0),.btnL(1'b0),
-        .btnR(1'b0),.btnD(host_d),.sw0(1'b0),.sw1(1'b0),.sw13(1'b0),.sw14(1'b0),.sw15(1'b0),
-        .ps2_clk(h_ps2c),.ps2_data(h_ps2d),.led(h_led),.JB(),.seg(),.dp(),.an(),
-        .uart_tx_pin(h_tx),.uart_rx_pin(c_tx));
-    My_Top_Module #(`BOARD_PARAMS) client(.clk(clk),.btnC(cl_c),.btnU(cl_u),.btnL(1'b0),
-        .btnR(1'b0),.btnD(1'b0),.sw0(1'b0),.sw1(1'b1),.sw13(1'b0),.sw14(1'b0),.sw15(1'b0),
-        .ps2_clk(c_ps2c),.ps2_data(c_ps2d),.led(c_led),.JB(),.seg(),.dp(),.an(),
-        .uart_tx_pin(c_tx),.uart_rx_pin(h_tx));
-    My_Top_Module #(`BOARD_PARAMS) solo(.clk(clk),.btnC(solo_c),.btnU(1'b0),.btnL(1'b0),
-        .btnR(1'b0),.btnD(1'b0),.sw0(1'b0),.sw1(1'b0),.sw13(1'b0),.sw14(1'b0),.sw15(1'b0),
-        .ps2_clk(s_ps2c),.ps2_data(s_ps2d),.led(s_led),.JB(),.seg(),.dp(),.an(),
-        .uart_tx_pin(solo_tx),.uart_rx_pin(1'b1));
+        .LINK_PERIOD(4000),.LINK_TIMEOUT(200000)
+    My_Top_Module #(`BOARD_PARAMS) A(.clk(clk),.btnC(a_c),.btnU(1'b0),.btnL(1'b0),
+        .btnR(1'b0),.btnD(a_d),.sw0(1'b0),.sw13(a_hit),.sw14(1'b0),.sw15(1'b0),
+        .ps2_clk(a_ps2c),.ps2_data(a_ps2d),.led(),.JB(),.seg(),.dp(),.an(),
+        .uart_tx_pin(a_tx),.uart_rx_pin(b_tx));
+    My_Top_Module #(`BOARD_PARAMS) B(.clk(clk),.btnC(b_c),.btnU(1'b0),.btnL(1'b0),
+        .btnR(1'b0),.btnD(b_d),.sw0(1'b0),.sw13(b_hit),.sw14(1'b0),.sw15(b_reset),
+        .ps2_clk(b_ps2c),.ps2_data(b_ps2d),.led(),.JB(),.seg(),.dp(),.an(),
+        .uart_tx_pin(b_tx),.uart_rx_pin(a_tx));
+    My_Top_Module #(`BOARD_PARAMS) S(.clk(clk),.btnC(s_c),.btnU(1'b0),.btnL(1'b0),
+        .btnR(1'b0),.btnD(1'b0),.sw0(1'b0),.sw13(1'b0),.sw14(1'b0),.sw15(1'b0),
+        .ps2_clk(s_ps2c),.ps2_data(s_ps2d),.led(),.JB(),.seg(),.dp(),.an(),
+        .uart_tx_pin(s_tx),.uart_rx_pin(1'b1));
 
-    integer errors=0, p2_shots=0;
-    always @(posedge clk) if(hostb.p2_shot && hostb.p2_in_game) p2_shots=p2_shots+1;
+    integer errors=0, i;
     task fail(input [8*64-1:0] msg); begin $display("FAIL: %0s", msg); errors=errors+1; end endtask
-    // Task arguments are copies, so the button is chosen by number.
+    // Task arguments are copies, so buttons are chosen by number.
+    // 0 A-C, 1 A-D, 2 B-C, 3 B-D, 4 S-C, 5 A-C+B-C together, 6 A-D+B-D together.
     task press(input integer which); begin
-        case(which) 0: host_c=1; 1: host_d=1; 2: cl_c=1; 3: solo_c=1; endcase
+        case(which)
+            0: a_c=1; 1: a_d=1; 2: b_c=1; 3: b_d=1; 4: s_c=1;
+            5: begin a_c=1; b_c=1; end 6: begin a_d=1; b_d=1; end
+        endcase
         repeat(40) @(posedge clk);
-        host_c=0; host_d=0; cl_c=0; solo_c=0;
+        a_c=0; a_d=0; b_c=0; b_d=0; s_c=0;
         repeat(40) @(posedge clk);
     end endtask
+    // Each SW13 flip is one test hit; three hits end that board's run.
+    task kill(input integer board); integer k; begin
+        for(k=0;k<3;k=k+1) begin
+            if(board==0) a_hit=~a_hit; else b_hit=~b_hit;
+            repeat(60) @(posedge clk);
+        end
+    end endtask
+    task wait_state(input integer board, input [2:0] st, input integer limit); integer w; begin
+        for(w=0; w<limit && (board==0 ? A.game_state : B.game_state)!=st; w=w+1) @(posedge clk);
+    end endtask
 
-    integer i;
-    reg [7:0] start_tile;
     initial begin
-        // Host alone at first: 2 PLAYERS must not start without the link.
         repeat(100) @(posedge clk);
-        press(1);
-        if(hostb.game.flow.sel!==1) fail("BTN-D did not select 2 PLAYERS");
-        // Lone solo board: 1 PLAYER starts without any link.
-        press(3);
-        for(i=0;i<400000 && solo.game_state!=3;i=i+1) @(posedge clk);
-        if(solo.game_state!=3) fail("solo board did not reach PLAYING in 1P");
-        if(solo.selected_2p!==0) fail("solo run is not 1P");
-        if(solo.link_up) fail("solo board reports a link");
-        // Wait for the two-board link.
-        for(i=0;i<200000 && !(hostb.link_up && client.link_up);i=i+1) @(posedge clk);
-        if(!(hostb.link_up && client.link_up)) fail("link did not come up");
+        b_reset=0;
+        // 1. Lone board, 1 PLAYER.
+        press(4);
+        for(i=0;i<400000 && S.game_state!=3;i=i+1) @(posedge clk);
+        if(S.game_state!=3) fail("lone board did not start 1P");
+        if(S.two_player) fail("lone board run marked 2P");
+
+        for(i=0;i<200000 && !(A.link_up && B.link_up);i=i+1) @(posedge clk);
+        if(!(A.link_up && B.link_up)) fail("link did not come up");
         else $display("link up at %0t", $time);
+
+        // 2. Both select 2 PLAYERS and start in the same clock.
+        press(6);
+        if(!(A.game.flow.sel && B.game.flow.sel)) fail("BTN-D did not select 2P");
+        press(5);
+        for(i=0;i<800000 && !(A.game_state==3 && B.game_state==3);i=i+1) @(posedge clk);
+        if(A.game_state!=3 || B.game_state!=3) fail("simultaneous start: not both playing");
+        if(A.leader == B.leader) fail("simultaneous start: leader not unique");
+        if(A.game_token!==B.game_token) fail("simultaneous start: tokens differ");
+        if(A.published_map!==B.published_map) fail("simultaneous start: maps differ");
+        $display("simultaneous start: A leader=%0d B leader=%0d seed A=%h B=%h", A.leader, B.leader,
+                 A.active_seed, B.active_seed);
+
+        // 3. Own zombies on each board; partner status crosses the link.
+        for(i=0;i<2000000 && !(A.render_active!=0 && B.render_active!=0);i=i+1) @(posedge clk);
+        if(A.render_active==0 || B.render_active==0) fail("a board has no zombies of its own");
+        if(!(A.same_game && B.same_game)) fail("boards do not see the same game");
+        repeat(20000) @(posedge clk);
+        if(A.peer_wave!==B.wave || B.peer_wave!==A.wave) fail("partner wave not received");
+        if(A.peer_health!==B.health) fail("partner hearts not received");
+        $display("zombies A=%b B=%b, A seg=%h B seg=%h", A.render_active, B.render_active,
+                 A.seg_value, B.seg_value);
+
+        // 4. A dies; B keeps playing.
+        kill(0);
+        wait_state(0, 3'd4, 20000);
+        if(A.game_state!=4) fail("A did not reach GAME OVER");
+        if(B.game_state!=3) fail("B stopped when A died");
+        repeat(20000) @(posedge clk);
+        if(B.peer_in_run) fail("B still shows partner playing");
+        if(!A.peer_in_run) fail("A does not show B still playing");
+        repeat(1<<P_OVER) @(posedge clk);
         press(0);
-        for(i=0;i<600000 && !(hostb.game_state==3 && client.game_state==3);i=i+1) @(posedge clk);
-        if(hostb.game_state!=3) fail("host did not reach PLAYING");
-        if(client.game_state!=3) fail("client did not reach PLAYING");
-        else $display("both playing at %0t, seed host=%h client=%h", $time,
-                      hostb.active_seed, client.active_seed);
-        if(hostb.published_map!==client.published_map) fail("maps differ");
-        if(hostb.active_seed!==client.active_seed) fail("seeds differ");
-        if(!hostb.coop) fail("host not in 2P run");
-        if(client.player_tile!==client.p2_addr) fail("client did not spawn on P2 tile");
-        // Host learns the P2 position.
-        for(i=0;i<50000 && !hostb.p2_synced;i=i+1) @(posedge clk);
-        if(!hostb.p2_synced) fail("host never received P2 pose");
-        if(hostb.p2_tile!==client.player_tile) fail("host P2 tile != client tile");
-        // Client walks forward; host follows.
-        start_tile = client.player_tile;
-        cl_u=1;
-        for(i=0;i<400000 && client.player_tile==start_tile;i=i+1) @(posedge clk);
-        cl_u=0;
-        // Real walking takes millions of clocks per step at 24 Hz; move the
-        // Player 2 pose directly (three tiles west, two north) instead.
-        force client.player_x = {16'd0, client.player_x[15:12]-4'd3, 12'h800};
-        force client.player_y = {16'd0, client.player_y[15:12]+4'd2, 12'h800};
+        if(A.game_state!=0) fail("A did not return to title");
         repeat(30000) @(posedge clk);
-        $display("client P2 tile %h, host sees %h", client.player_tile, hostb.p2_tile);
-        if(client.player_tile==start_tile) fail("forced move had no effect");
-        if(hostb.p2_tile!==client.player_tile) fail("host did not follow P2 movement");
-        release client.player_x; release client.player_y;
-        // Client fires; host must register a P2 shot.
+        if(A.game_state!=0) fail("A rejoined B's ongoing run");
+
+        // 5. B dies and returns; A starts alone and B joins.
+        kill(1);
+        wait_state(1, 3'd4, 20000);
+        repeat((1<<P_OVER)+100) @(posedge clk);
         press(2);
-        repeat(40000) @(posedge clk);
-        if(p2_shots<1) fail("P2 shot did not reach the host");
-        // Zombies appear on the client board.
-        for(i=0;i<2000000 && client.render_active==0;i=i+1) @(posedge clk);
-        if(client.render_active==0) fail("no zombies shown on client");
-        else $display("client shows zombies %b (host %b)", client.render_active, hostb.local_render_active);
-        if(client.game.frame_wave!==hostb.wave && client.game.shown_wave!==hostb.wave) fail("wave differs");
-        $display("P2 shots seen: %0d, P2 hearts %0d", p2_shots, hostb.p2_health);
+        if(B.game_state!=0) fail("B did not return to title");
+        press(0);   // A still has 2 PLAYERS selected
+        for(i=0;i<800000 && !(A.game_state==3 && B.game_state==3);i=i+1) @(posedge clk);
+        if(A.game_state!=3 || B.game_state!=3) fail("auto-join: not both playing");
+        if(!A.leader || B.leader) fail("auto-join: wrong leader");
+        if(A.published_map!==B.published_map) fail("auto-join: maps differ");
+        $display("auto-join: seed A=%h B=%h token %h/%h", A.active_seed, B.active_seed,
+                 A.game_token, B.game_token);
+
         if(errors==0) $display("PASS"); else $display("FAILED with %0d errors", errors);
         $finish;
     end

@@ -11,9 +11,10 @@ module menu_screens #(parameter ENABLE_2P = 0)(
     input wire [5:0] progress,        // 0..63 generating bar fill
     input wire [3:0] wave_tens, input wire [3:0] wave_ones,   // wave reached (end screens)
     input wire over_ready,            // show the retry / play-again hint
-    input wire client_view,           // Player 2 board: the host runs the menu
-    input wire link_up,               // the two boards are linked
-    input wire allow_2p,              // 2 PLAYERS can be started now
+    input wire link_up,               // the other board is linked (title hint)
+    input wire show_peer,             // end screens: show the other board's wave
+    input wire [3:0] peer_tens, input wire [3:0] peer_ones,
+    input wire peer_in_run,           // the other board is still playing
     output reg [15:0] pixel);
     localparam BG=16'h0842, RED=16'hE145, WHITE=16'hEF7D, YELLOW=16'hF645,
                GREY=16'h6B6F, DARK=16'h4208, BAND=16'h2921, GROUND=16'h1162,
@@ -44,26 +45,7 @@ module menu_screens #(parameter ENABLE_2P = 0)(
     always @* begin
         str=0; len=0; x0=0; y0=0; shift=0; color=WHITE; line_on=0;
         case(screen)
-            3'd0: if(client_view) begin
-                // Player 2 board: no menu, the host picks the mode and starts.
-                if(py>=3 && py<=12) begin
-                    line_on=1; str={"ZOMBIE",80'd0}; len=6; x0=25; y0=3; shift=1; color=RED;
-                end else if(py>=16 && py<=20) begin
-                    line_on=1; str={"SURVIVAL",64'd0}; len=8; x0=32; y0=16;
-                end else if(py>=28 && py<=32) begin
-                    line_on=1; str={"PLAYER 2",64'd0}; len=8; x0=32; y0=28; color=YELLOW;
-                end else if(py>=37 && py<=41) begin
-                    line_on=1; y0=37;
-                    if(link_up) begin
-                        str={"LINKED",80'd0}; len=6; x0=36; color=GREEN;
-                    end else begin
-                        str={"NO LINK",72'd0}; len=7; x0=34; color=RED;
-                    end
-                end else if(py>=57 && py<=61) begin
-                    line_on=1; y0=57; color=HINT; len=16; x0=16;
-                    str = link_up ? "HOST PICKS 2P..." : "WAITING FOR HOST";
-                end
-            end else begin
+            3'd0: begin
                 if(py>=3 && py<=12) begin
                     line_on=1; str={"ZOMBIE",80'd0}; len=6; x0=25; y0=3; shift=1; color=RED;
                 end else if(py>=16 && py<=20) begin
@@ -78,11 +60,13 @@ module menu_screens #(parameter ENABLE_2P = 0)(
                     color = !ENABLE_2P ? DARK : (sel ? YELLOW : GREY);
                 end else if(py>=57 && py<=61) begin
                     line_on=1; y0=57; color=HINT;
-                    if(sel && !allow_2p) begin
-                        str={"WAITING FOR P2",16'd0}; len=14; x0=20;
+                    if(sel && !link_up) begin
+                        str={"NO LINK TO P2",24'd0}; len=13; x0=22; color=GREY;
                     end else begin
                         str={"CLICK TO START",16'd0}; len=14; x0=20;
                     end
+                end else if(py>=47 && py<=51 && ENABLE_2P && link_up) begin
+                    line_on=1; str={"LINKED",80'd0}; len=6; x0=36; y0=47; color=GREEN;
                 end
             end
             3'd1: begin
@@ -105,6 +89,10 @@ module menu_screens #(parameter ENABLE_2P = 0)(
                     end else begin
                         str={8'd48+{4'd0,wave_ones}," WAVES CLEARED",8'd0}; len=15; x0=19;
                     end
+                end else if(py>=44 && py<=48 && show_peer) begin
+                    line_on=1; y0=44; color = peer_in_run ? GREEN : GREY;
+                    str={"PARTNER WAVE ",8'd48+{4'd0,peer_tens},8'd48+{4'd0,peer_ones},8'd0};
+                    len=15; x0=18;
                 end else if(py>=52 && py<=56 && over_ready) begin
                     line_on=1; str={"CLICK TO PLAY",24'd0}; len=13; x0=22; y0=52; color=HINT;
                 end
@@ -119,6 +107,10 @@ module menu_screens #(parameter ENABLE_2P = 0)(
                     end else begin
                         str={"WAVE ",8'd48+{4'd0,wave_ones},80'd0}; len=6; x0=37;
                     end
+                end else if(py>=40 && py<=44 && show_peer) begin
+                    line_on=1; y0=40; color = peer_in_run ? GREEN : GREY;
+                    str={"PARTNER WAVE ",8'd48+{4'd0,peer_tens},8'd48+{4'd0,peer_ones},8'd0};
+                    len=15; x0=18;
                 end else if(py>=52 && py<=56 && over_ready) begin
                     line_on=1; str={"CLICK TO RETRY",16'd0}; len=14; x0=20; y0=52; color=HINT;
                 end
@@ -146,14 +138,12 @@ module menu_screens #(parameter ENABLE_2P = 0)(
             default: cursor_row=4'b0000;
         endcase
     end
-    wire on_cursor = show_cursor && !client_view && screen==3'd0 && px>=cursor_x && py>=cursor_y &&
+    wire on_cursor = show_cursor && screen==3'd0 && px>=cursor_x && py>=cursor_y &&
                      cdx<4 && cdy<6 && cursor_row[3-cdx[1:0]];
 
     always @* begin
         pixel=BG;
-        if(screen==3'd0 && client_view) begin
-            if(py>=54) pixel=((px+py)&2'b11)==0 ? GROUND_HI : GROUND;
-        end else if(screen==3'd0) begin
+        if(screen==3'd0) begin
             if(py>=54) pixel=((px+py)&2'b11)==0 ? GROUND_HI : GROUND;
             if(px>=OPT_X0 && px<=OPT_X1 &&
                ((!sel && py>=OPT1_Y0 && py<=OPT1_Y1) ||

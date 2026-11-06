@@ -76,7 +76,7 @@ rendering, and validation instructions.
 
 `My_Top_Module` is the whole game: Fawaz map generator, title/HUD/OLED
 pipeline, raycaster, flow-field zombie AI, camera-ray combat and first-person
-zombie sprites. Both boards get the **same bitstream**; SW1 picks the role.
+zombie sprites. Every board gets the **same bitstream**; there are no roles.
 
 ### Build and program
 
@@ -92,42 +92,40 @@ Bitstream. Program the same bitstream onto every board.
 | BTN-U / BTN-D / BTN-L / BTN-R | Walk forward / back / strafe left / strafe right |
 | Left-click or BTN-C | Fire; click/BTN-C also confirms menus |
 | Right-click | Reload |
-| BTN-D on the title | Toggle 1 PLAYER / 2 PLAYERS (host board) |
+| BTN-D on the title | Toggle 1 PLAYER / 2 PLAYERS |
 | SW0 | Toggle the full map overlay |
-| SW1 | Role: down = host / Player 1, up = Player 2 board |
 | SW13 / SW14, each flip | Test damage / defeat the lowest active zombie slot |
 | SW15 up, then down | Reset to title |
-| Seven-segment display | Active map seed |
-| LED14 / LED13 / LED12 | Link up / Player 2 board / 2-player run in progress |
+| Seven-segment display | Map seed; in a 2-player game: own wave (left) and partner wave (right) |
+| LED15 / LED14-12 | Link up / partner's hearts during a 2-player game |
 
 ### One player
 
-Leave SW1 down, pick **1 PLAYER** and click (or BTN-C). Nothing else is
-needed: the UART link is ignored and a new random map is used each game.
+Pick **1 PLAYER** and click (or BTN-C). No second board is needed and a new
+random map is used each game.
 
 ### Two players
 
-1. Connect JC1 (TX, K17) of each board to JC2 (RX, M18) of the other, and
-   GND to GND. Each board keeps its own USB power.
-2. Board A: SW1 **down** (host, Player 1). Board B: SW1 **up** (Player 2).
-   Board B shows `PLAYER 2` and `LINKED` once the link is up (LED14 on both).
-3. On the host, select **2 PLAYERS** (BTN-D or mouse) and start. Until the
-   Player 2 board is linked the title says `WAITING FOR P2` and will not start.
-4. Board B follows automatically: it builds the same map from the host's seed,
-   spawns on the Player 2 tile and plays its own first-person view with its
-   own mouse and buttons.
+Connect JC1 (TX, K17) of each board to JC2 (RX, M18) of the other, and GND to
+GND. LED15 and `LINKED` on the title show the link is up.
 
-The host runs the waves and all zombies. Zombies chase whichever player is
-nearer and attack either one; shots from both boards trace from that
-player's own camera. Each player has three hearts. A player who loses all
-hearts is frozen until the run ends; the run ends when both are down (or the
-host's player is down after the link is lost). The teammate is shown as a
-yellow tile on the SW0 map. If the link drops, the host carries on alone and
-Player 2 returns to its waiting screen.
+Each board plays its **own complete game** (own zombies, waves, hearts, gun
+and controls) on the **same map**, like a survival race:
 
-Link packets (115200 baud, 8N1): Player 2 -> host every 20 ms with its pose
-and shot counter; host -> Player 2 every 20 ms with game state, seed, wave,
-zombies left, both players' hearts, Player 1's tile and the zombie list. See
+1. On either board select **2 PLAYERS** and start. Without the link the title
+   shows `NO LINK TO P2` and will not start.
+2. The other board, if it is on its title screen, joins automatically: it
+   builds the same map from the starting board's seed and starts its own run.
+   If both boards start at the same moment, one of them is picked to choose
+   the map and the other joins it.
+3. While playing, the seven-segment display shows your wave and your
+   partner's wave, and LED14-12 show your partner's hearts.
+4. Each run ends on its own (game over or victory); the other board keeps
+   playing. The end screen shows `PARTNER WAVE nn` (green while the partner
+   is still playing).
+
+The link only carries a status word every 20 ms (state, 2-player flag,
+leader flag, game token, start priority, map seed, wave, hearts). See
 [docs/multiplayer-link.md](docs/multiplayer-link.md).
 
 Menus, generating screen, hearts, ten waves,
