@@ -13,6 +13,7 @@ checksum equal to the sum of type, length and payload.
 | Type | Length | Payload | Rate |
 |---|---:|---|---|
 | `30` STATUS | 15 | Sequence byte, 14 status bytes | Every 20 ms from each board |
+| `31` ZOMBIES | 26 | Sequence byte, 25 zombie bytes | Every 20 ms from the leader during a shared run |
 
 `link_up` rises on the first valid STATUS packet and falls after 500 ms without
 one. All periods are clock-cycle parameters (100 MHz defaults).
@@ -32,6 +33,17 @@ one. All periods are clock-cycle parameters (100 MHz defaults).
 | `[69:54]` | Position x (Q4.12 tiles, east) |
 | `[85:70]` | Position y (Q4.12 tiles, north) |
 | `[95:86]` | View angle (1024 per turn, 0 = north, clockwise) |
+| `[99:96]` | Shot counter (each change is one new shot) |
+| `[101:100]` | Leader only: the follower's hearts (the leader tracks them) |
+| `[108:102]` | Leader only: zombies left in the wave |
+
+## Zombie word (leader to follower)
+
+| Bits | Field |
+|---|---|
+| `[95:0]` | Eight zombie x positions, 12 bits each (Q4.8 tiles, x right) |
+| `[191:96]` | Eight zombie y positions, 12 bits each (Q4.8 tiles, y down) |
+| `[199:192]` | Active mask |
 
 ## Joining a game (`game_flow`)
 
@@ -46,9 +58,20 @@ one. All periods are clock-cycle parameters (100 MHz defaults).
 - After a run, a board returning to the title keeps its token, so it never
   re-joins the run its partner is still playing.
 
-Each board runs its own enemies, waves and hearts. While both boards play the
-same run, each draws the other player from its position: sprite slot 8 of
-`zombie_renderer` (`SLOTS=9`, `HAS_ALLY=1`, human colours) and a yellow tile on
+## Shared run
+
+The leader runs `wave_controller` and `enemy_manager` (`TWO_PLAYERS=1`) for
+both players. Player 2 is the follower: its position (`player2_pos_*`,
+`player2_tile`), its camera pose for shots (`camera2_*`), and a shot pulse for
+each change of its shot counter. Zombies follow the two-goal BFS field, so each
+one heads for the nearer player. The leader counts the follower's hearts from
+`player_hit_p2` and returns them in the status word. The follower does not
+spawn or move zombies; it draws the leader's zombie word and shows the leader's
+wave and zombies-left count. A player with no hearts is frozen; the leader ends
+the run when both are down or the last wave is won, and the follower's run ends
+with the leader's. Both boards draw the other player from its position (sprite
+slot 8 of `zombie_renderer`, `SLOTS=9`, `HAS_ALLY=1`) and as a yellow tile on
 the SW0 map.
+
 The older host/client `multiplayer_link` module remains in the source tree
 with its own testbench but is not used by `My_Top_Module`.

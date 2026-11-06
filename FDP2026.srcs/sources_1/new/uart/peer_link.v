@@ -1,28 +1,38 @@
 `timescale 1ns / 1ps
-// Symmetric Basys-to-Basys link: no host and no client. Each board sends its
-// STATUS_BYTES status word every PERIOD_CYCLES and receives the other board's.
+// Symmetric Basys-to-Basys link: no fixed host and no client. Each board sends
+// its STATUS_BYTES status word every PERIOD_CYCLES and receives the other
+// board's. While send_extra is high, a second packet carrying EXTRA_BYTES
+// (the zombie list of the board running a shared game) follows each status.
 // link_up stays high while valid packets keep arriving (TIMEOUT_CYCLES).
 //
-// Packet: A5, type 30 (STATUS), length 1+STATUS_BYTES, sequence byte, status
-// bytes, checksum (packet_tx/packet_rx framing). Meaning of the status word
-// belongs to the top level.
+// Packets (packet_tx/packet_rx framing: A5, type, length, payload, checksum):
+//   30 STATUS: sequence byte, STATUS_BYTES status bytes
+//   31 EXTRA:  sequence byte, EXTRA_BYTES bytes
+// The meaning of both words belongs to the top level.
 module peer_link #(
     parameter integer CLK_FREQ = 100_000_000,
     parameter integer PERIOD_CYCLES = 2_000_000,   // 20 ms
     parameter integer TIMEOUT_CYCLES = 50_000_000, // 500 ms
-    parameter integer STATUS_BYTES = 8             // 1..15
+    parameter integer STATUS_BYTES = 8,            // 1..31
+    parameter integer EXTRA_BYTES = 1              // 1..31
 )(
     input wire clk, input wire rst,
     input wire uart_rx_pin, output wire uart_tx_pin,
     input wire [8*STATUS_BYTES-1:0] local_status,
+    input wire send_extra,
+    input wire [8*EXTRA_BYTES-1:0] local_extra,
     output reg [8*STATUS_BYTES-1:0] peer_status,
-    output reg peer_status_valid,                  // one clock per received packet
+    output reg peer_status_valid,                  // one clock per received status
+    output reg [8*EXTRA_BYTES-1:0] peer_extra,
+    output reg peer_extra_valid,                   // one clock per received extra word
     output reg link_up,
     output wire packet_error, output wire frame_error
 );
     localparam [7:0] PKT_STATUS = 8'h30;
-    localparam integer MAX_PAYLOAD = 16;
-    localparam [7:0] PKT_LEN = STATUS_BYTES + 1;
+    localparam [7:0] PKT_EXTRA = 8'h31;
+    localparam integer MAX_PAYLOAD = 32;
+    localparam [7:0] STATUS_LEN = STATUS_BYTES + 1;
+    localparam [7:0] EXTRA_LEN = EXTRA_BYTES + 1;
 
     wire tick_16x, rx_valid, rx_frame_error, pkt_busy, pkt_tx_start, tx_busy;
     wire pkt_valid, pkt_error;
@@ -41,40 +51,56 @@ module peer_link #(
 
     reg [7:0] tx_sequence;
     reg [31:0] period_timer, timeout_timer;
-    reg send_due;
+    reg status_due, extra_due;
+    // Status first; the extra word goes out once the status packet has started.
+    wire send_status = status_due;
+    wire send_extra_now = !status_due && extra_due;
     reg [8*MAX_PAYLOAD-1:0] tx_payload;
     always @* begin
         tx_payload = 0;
         tx_payload[7:0] = tx_sequence;
-        tx_payload[8*STATUS_BYTES+7:8] = local_status;
+        if (send_status) tx_payload[8*STATUS_BYTES+7:8] = local_status;
+        else tx_payload[8*EXTRA_BYTES+7:8] = local_extra;
     end
-    wire tx_start_packet = send_due && !pkt_busy;
+    wire tx_start_packet = (send_status || send_extra_now) && !pkt_busy;
     packet_tx #(.MAX_PAYLOAD(MAX_PAYLOAD)) packet_sender(
         .clk(clk), .rst(rst), .send(tx_start_packet),
-        .pkt_type(PKT_STATUS), .pkt_len(PKT_LEN), .pkt_payload(tx_payload),
+        .pkt_type(send_status ? PKT_STATUS : PKT_EXTRA),
+        .pkt_len(send_status ? STATUS_LEN : EXTRA_LEN), .pkt_payload(tx_payload),
         .corrupt_checksum(1'b0), .busy(pkt_busy),
         .tx_start(pkt_tx_start), .tx_data(pkt_tx_data), .tx_busy(tx_busy));
     assign packet_error = pkt_error;
     assign frame_error = rx_frame_error;
 
+    wire got_status = pkt_valid && pkt_type == PKT_STATUS && pkt_len == STATUS_LEN;
+    wire got_extra = pkt_valid && pkt_type == PKT_EXTRA && pkt_len == EXTRA_LEN;
     always @(posedge clk) begin
         peer_status_valid <= 1'b0;
+        peer_extra_valid <= 1'b0;
         if (rst) begin
             tx_sequence <= 0; period_timer <= 0; timeout_timer <= 0;
-            send_due <= 0; link_up <= 0; peer_status <= 0;
+            status_due <= 0; extra_due <= 0; link_up <= 0;
+            peer_status <= 0; peer_extra <= 0;
         end else begin
             if (tx_start_packet) begin
-                send_due <= 0;
                 tx_sequence <= tx_sequence + 1'b1;
+                if (send_status) status_due <= 0; else extra_due <= 0;
             end
             if (period_timer == PERIOD_CYCLES-1) begin
                 period_timer <= 0;
-                send_due <= 1;
+                status_due <= 1;
+                extra_due <= send_extra;
             end else period_timer <= period_timer + 1'b1;
 
-            if (pkt_valid && pkt_type == PKT_STATUS && pkt_len == PKT_LEN) begin
+            if (got_status) begin
                 peer_status <= pkt_payload[8*STATUS_BYTES+7:8];
                 peer_status_valid <= 1;
+            end
+            if (got_extra) begin
+                peer_extra <= pkt_payload[8*EXTRA_BYTES+7:8];
+                peer_extra_valid <= 1;
+            end
+            if (got_status || got_extra) begin
                 link_up <= 1;
                 timeout_timer <= 0;
             end else if (link_up) begin

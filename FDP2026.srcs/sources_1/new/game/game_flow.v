@@ -15,12 +15,14 @@
 //    Both end screens ignore input for 2^OVER_SHIFT clocks (over_ready=0),
 //    then a click or btnC returns to the title.
 //
-// Two boards (2 PLAYERS): each board plays its own complete game (own zombies,
-// waves and hearts) on the same map. The board that starts is the leader: it
-// picks the map and a new game token. A linked board on its title screen joins
+// Two boards (2 PLAYERS): both players are in ONE shared run. The board that
+// starts is the leader: it picks the map and a new game token and runs the
+// waves and zombies for both players. A linked board on its title screen joins
 // any new leader game it sees: it waits for the leader's final seed (sent once
 // the leader is PLAYING), generates the same map from it and starts. If both
 // boards start at once, the lower priority value follows the other.
+// The leader ends the run (health_zero: both players down, or game_won); the
+// follower's run ends with the leader's (or when the leader is lost).
 module game_flow #(parameter ENABLE_2P = 0, parameter GEN_SHIFT = 26,
                    parameter OVER_SHIFT = 27)(
     input wire clk, input wire rst,
@@ -134,8 +136,13 @@ module game_flow #(parameter ENABLE_2P = 0, parameter GEN_SHIFT = 26,
                     end
                 end
                 S_PLAY: begin
-                    // Each board's run is its own: only its death or win ends it.
-                    if(health_zero && !play_start) begin state<=S_OVER; timer<=0; end
+                    if(following) begin
+                        // Shared run: it ends when the leader's run ends.
+                        if(!(link_up && peer_2p && peer_token==token) ||
+                           peer_state==S_OVER || peer_state==S_TITLE) begin
+                            state<=S_OVER; timer<=0;
+                        end else if(peer_state==S_WIN) begin state<=S_WIN; timer<=0; end
+                    end else if(health_zero && !play_start) begin state<=S_OVER; timer<=0; end
                     else if(game_won && !play_start) begin state<=S_WIN; timer<=0; end
                 end
                 S_OVER, S_WIN: begin

@@ -109,27 +109,32 @@ random map is used each game.
 Connect JC1 (TX, K17) of each board to JC2 (RX, M18) of the other, and GND to
 GND. LED15 and `LINKED` on the title show the link is up.
 
-Each board plays its **own complete game** (own zombies, waves, hearts, gun
-and controls) on the **same map**, like a survival race:
+Both players are in **one shared game**: the same map, the same zombies.
 
 1. On either board select **2 PLAYERS** and start. Without the link the title
    shows `NO LINK TO P2` and will not start.
 2. The other board, if it is on its title screen, joins automatically: it
-   builds the same map from the starting board's seed and starts its own run.
-   If both boards start at the same moment, one of them is picked to choose
-   the map and the other joins it.
-3. While both of you are playing you can see your partner: a blue-shirted
-   figure in your 3D view (hidden behind walls like the zombies) and a yellow
-   tile on the SW0 map. The seven-segment display shows your wave and your
-   partner's wave, and LED14-12 show your partner's hearts. Zombies are not
-   shared: each board's zombies only chase that board's player.
-4. Each run ends on its own (game over or victory); the other board keeps
-   playing. The end screen shows `PARTNER WAVE nn` (green while the partner
-   is still playing).
+   builds the same map from the starting board's seed and spawns on the map's
+   second spawn tile. If both boards start at the same moment, one of them is
+   picked to run the game and the other joins it.
+3. The starting board runs the waves and the zombies for both players. Zombies
+   chase whichever player is nearer (by walking distance) and attack either
+   one; shots from both boards hit them. The other board draws the same
+   zombies and sends its position, view angle and shots.
+4. You see your partner as a blue-shirted figure in your 3D view (hidden
+   behind walls like the zombies) and as a yellow tile on the SW0 map.
+   LED14-12 show your partner's hearts.
+5. Each player has three hearts. A player who is down is frozen (cannot move
+   or shoot) while the partner fights on. The run ends for both boards when
+   both players are down (GAME OVER) or after the last wave (VICTORY).
+6. If the link is lost, the starting board carries on alone and the other
+   board ends its run.
 
-The link only carries a status word every 20 ms (state, 2-player flag,
-leader flag, game token, start priority, map seed, wave, hearts, position and
-view angle). See
+The link carries a status word from each board every 20 ms (state, 2-player
+flag, leader flag, game token, start priority, map seed, wave, hearts,
+position, view angle, shot counter; from the starting board also the other
+player's hearts and the zombies left) and, from the starting board during a
+run, the zombie list (eight positions and the active mask). See
 [docs/multiplayer-link.md](docs/multiplayer-link.md).
 
 Menus, generating screen, hearts, ten waves,

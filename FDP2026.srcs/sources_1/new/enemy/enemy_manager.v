@@ -26,6 +26,9 @@ module enemy_manager #(
     input wire [1:0] aim,
     input wire [31:0] camera_x, camera_y,
     input wire [9:0] camera_angle,
+    // Player 2 camera pose for USE_CAMERA_RAY shots (TWO_PLAYERS only).
+    input wire [31:0] camera2_x, camera2_y,
+    input wire [9:0] camera2_angle,
     input wire player_active, player2_active,
     input wire [7:0] player2_tile,
     input wire shot_fired_p2,
@@ -88,11 +91,16 @@ module enemy_manager #(
     reg ray_player, damage_player;
     reg [ID_BITS-1:0] hit_id, damage_id;
     reg [7:0] damage_tile;
+    // Camera pose of the shot being launched (USE_CAMERA_RAY).
+    wire [31:0] shot_camera_x, shot_camera_y;
+    wire [9:0] shot_camera_angle;
 
     generate if(TWO_PLAYERS) begin : g_shots
         reg pending_p1, pending_p2;
         reg [7:0] origin_p1, origin_p2;
         reg [1:0] facing_p1, facing_p2;
+        reg [31:0] pose_x_p1, pose_y_p1, pose_x_p2, pose_y_p2;
+        reg [9:0] pose_angle_p1, pose_angle_p2;
         wire issue_ready = combat_enabled && !ray_busy && !damage_pending;
         assign shot_ready = combat_enabled && p1_live && !pending_p1;
         assign shot_ready_p2 = combat_enabled && p2_live && !pending_p2;
@@ -102,6 +110,9 @@ module enemy_manager #(
         assign fire_p2 = !pending_p1;
         assign ray_origin = fire_p2 ? origin_p2 : origin_p1;
         assign ray_aim = fire_p2 ? facing_p2 : facing_p1;
+        assign shot_camera_x = fire_p2 ? pose_x_p2 : pose_x_p1;
+        assign shot_camera_y = fire_p2 ? pose_y_p2 : pose_y_p1;
+        assign shot_camera_angle = fire_p2 ? pose_angle_p2 : pose_angle_p1;
         assign shots_waiting = pending_p1 || pending_p2 || capture_p1 || capture_p2;
 
         // One mailbox per player. Resolve P1 first when both are pending.
@@ -112,9 +123,11 @@ module enemy_manager #(
                 if(fire_ray && fire_p2) pending_p2<=0;
                 if(capture_p1) begin
                     pending_p1<=1; origin_p1<=player_tile; facing_p1<=aim;
+                    pose_x_p1<=camera_x; pose_y_p1<=camera_y; pose_angle_p1<=camera_angle;
                 end
                 if(capture_p2) begin
                     pending_p2<=1; origin_p2<=player2_tile; facing_p2<=aim_p2;
+                    pose_x_p2<=camera2_x; pose_y_p2<=camera2_y; pose_angle_p2<=camera2_angle;
                 end
             end
         end
@@ -125,13 +138,16 @@ module enemy_manager #(
         assign fire_p2 = 0;
         assign ray_origin = player_tile;
         assign ray_aim = aim;
+        assign shot_camera_x = camera_x;
+        assign shot_camera_y = camera_y;
+        assign shot_camera_angle = camera_angle;
         assign shots_waiting = shot_fired;
     end endgenerate
 
     enemy_combat #(.USE_CAMERA_RAY(USE_CAMERA_RAY), .MAX_ENEMIES(MAX_ENEMIES),
         .COORD_FRAC_BITS(COORD_FRAC_BITS), .HIT_RADIUS(HIT_RADIUS)) combat(
         .clk(clk),.reset(rst || clear),.enabled(playing && map_ready),
-        .camera_x(camera_x),.camera_y(camera_y),.camera_angle(camera_angle),
+        .camera_x(shot_camera_x),.camera_y(shot_camera_y),.camera_angle(shot_camera_angle),
         .shot_fired(fire_ray),.player_tile(ray_origin),.aim(ray_aim),.walls(map_bits),
         .active(active),.position_x(render_x),.position_y(render_y),
         .occupied(occupied),.busy(ray_busy),.hit_valid(hit_valid),.hit_tile(hit_tile));

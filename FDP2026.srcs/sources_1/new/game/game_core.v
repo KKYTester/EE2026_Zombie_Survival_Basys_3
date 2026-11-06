@@ -52,6 +52,12 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     input wire [7:0] peer_token, input wire [15:0] peer_priority,
     input wire [15:0] peer_seed,
     input wire [6:0] peer_wave, input wire peer_in_run,  // shown on end screens
+    // Shared 2-player run. Leader: teammate_alive keeps the run going after
+    // this player's last heart. Follower: hearts, wave and zombies left come
+    // from the leader, which runs the waves.
+    input wire teammate_alive,
+    input wire [1:0] follow_health, input wire [6:0] follow_remaining,
+    output wire [6:0] remaining,                  // this board's zombies left (leader/1P)
     input wire [7:0] partner_tile,                // other player's tile ({y,x}, y down)
     input wire partner_visible,                   // draw it on the SW0 map
     output wire two_player, output wire leader,
@@ -106,7 +112,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     wire damage,tint,low_blink;
     wire wave_clear,game_won;
     wire [5:0] alive;
-    wire [6:0] remaining;
+    wire [1:0] local_health;
+    wire local_damage;
     wire [255:0] zombies = occupied;
     wire playing_now = flow_state==3'd3;
     assign map_ready=ready; assign map_busy=busy; assign active_seed=seed;
@@ -119,9 +126,16 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         mouse_left_prev <= rst ? 1'b0 : mouse_left;
         mouse_right_prev <= rst ? 1'b0 : mouse_right;
     end
-    wire fire_request = playing_now && (press_c || (mouse_left && !mouse_left_prev));
+    // Follower in a shared run: the leader owns waves and this player's hearts.
+    wire follower = two_player && !leader;
+    reg [1:0] follow_health_prev;
+    always @(posedge clk) follow_health_prev <= (rst || play_start) ? 2'd3 : follow_health;
+    assign health = follower ? follow_health : local_health;
+    assign damage = follower ? (playing_now && follow_health<follow_health_prev) : local_damage;
+    wire alive_now = health!=2'd0;   // a downed player waits for the partner
+    wire fire_request = playing_now && alive_now && (press_c || (mouse_left && !mouse_left_prev));
     // Reload: a new right-click during play (no button, so btnL stays free for movement).
-    wire reload_request = playing_now && mouse_right && !mouse_right_prev;
+    wire reload_request = playing_now && alive_now && mouse_right && !mouse_right_prev;
     wire weapon_flash, weapon_recoil, weapon_reloading;
     wire [2:0] ammo;
     wire [4:0] weapon_drop;
@@ -137,7 +151,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .OVER_SHIFT(OVER_SHIFT)) flow(
         .clk(clk),.rst(rst),.btn_c(press_c),.btn_d(btn_d),.btn_l(1'b0),.btn_r(1'b0),
         .mouse_x(mouse_x),.mouse_y(mouse_y),.mouse_left(mouse_left),.mouse_event(mouse_event),
-        .map_ready(ready),.map_busy(busy),.health_zero(health==2'd0),.game_won(game_won),
+        .map_ready(ready),.map_busy(busy),.health_zero(!alive_now && !teammate_alive),.game_won(game_won),
         .random(seed_counter),.link_up(link_up),
         .peer_state(peer_state),.peer_2p(peer_2p),.peer_leader(peer_leader),
         .peer_token(peer_token),.peer_priority(peer_priority),
@@ -146,10 +160,10 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .state(flow_state),.sel(menu_sel),.regenerate(regenerate),.play_start(play_start),
         .progress(progress),.over_ready(over_ready));
     player_health hearts(.clk(clk),.rst(rst),.play_start(play_start),
-        .playing(playing_now),.hit(player_hit),.health(health),.damage(damage));
+        .playing(playing_now),.hit(player_hit && !follower),.health(local_health),.damage(local_damage));
     // Only the host spawns zombies; the Player 2 board shows the host's waves.
     wave_controller #(.SPAWN_SHIFT(SPAWN_SHIFT),.CLEAR_SHIFT(CLEAR_SHIFT),.WIN_WAVE(WIN_WAVE)) waves(
-        .clk(clk),.rst(rst),.play_start(play_start),.playing(playing_now),
+        .clk(clk),.rst(rst),.play_start(play_start),.playing(playing_now && !follower),
         .map_bits(published_map),.occupied(USE_SPAWN_OCCUPANCY ? spawn_occupied : zombies),
         .player_tile(player_tile),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.wave(wave),
@@ -266,8 +280,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
             frame_p2<=partner_tile; frame_partner<=partner_visible && playing_now;
             frame_pos_x<=player_pos_x; frame_pos_y<=player_pos_y; frame_angle<=player_angle;
             frame_health<=health;
-            frame_wave<=wave;
-            frame_remaining<=remaining; frame_zombies<=zombies;
+            frame_wave<=follower ? peer_wave : wave;
+            frame_remaining<=follower ? follow_remaining : remaining; frame_zombies<=zombies;
             frame_zombie_active<=zombie_active; frame_zombie_x<=zombie_x; frame_zombie_y<=zombie_y;
             frame_flash<=weapon_flash; frame_recoil<=weapon_recoil;
             frame_reloading<=weapon_reloading; frame_ammo<=ammo; frame_drop<=weapon_drop;
