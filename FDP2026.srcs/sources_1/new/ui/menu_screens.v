@@ -11,6 +11,10 @@ module menu_screens #(parameter ENABLE_2P = 0)(
     input wire [5:0] progress,        // 0..63 generating bar fill
     input wire [3:0] wave_tens, input wire [3:0] wave_ones,   // wave reached (end screens)
     input wire over_ready,            // show the retry / play-again hint
+    input wire link_up,               // the other board is linked (title hint)
+    input wire show_peer,             // end screens: show the other board's wave
+    input wire [3:0] peer_tens, input wire [3:0] peer_ones,
+    input wire peer_in_run,           // the other board is still playing
     output reg [15:0] pixel);
     localparam BG=16'h0842, RED=16'hE145, WHITE=16'hEF7D, YELLOW=16'hF645,
                GREY=16'h6B6F, DARK=16'h4208, BAND=16'h2921, GROUND=16'h1162,
@@ -55,7 +59,14 @@ module menu_screens #(parameter ENABLE_2P = 0)(
                     str = sel ? {"> 2 PLAYERS",40'd0} : {"  2 PLAYERS",40'd0};
                     color = !ENABLE_2P ? DARK : (sel ? YELLOW : GREY);
                 end else if(py>=57 && py<=61) begin
-                    line_on=1; str={"CLICK TO START",16'd0}; len=14; x0=20; y0=57; color=HINT;
+                    line_on=1; y0=57; color=HINT;
+                    if(sel && !link_up) begin
+                        str={"NO LINK TO P2",24'd0}; len=13; x0=22; color=GREY;
+                    end else begin
+                        str={"CLICK TO START",16'd0}; len=14; x0=20;
+                    end
+                end else if(py>=47 && py<=51 && ENABLE_2P && link_up) begin
+                    line_on=1; str={"LINKED",80'd0}; len=6; x0=36; y0=47; color=GREEN;
                 end
             end
             3'd1: begin
@@ -78,6 +89,10 @@ module menu_screens #(parameter ENABLE_2P = 0)(
                     end else begin
                         str={8'd48+{4'd0,wave_ones}," WAVES CLEARED",8'd0}; len=15; x0=19;
                     end
+                end else if(py>=44 && py<=48 && show_peer) begin
+                    line_on=1; y0=44; color = peer_in_run ? GREEN : GREY;
+                    str={"PARTNER WAVE ",8'd48+{4'd0,peer_tens},8'd48+{4'd0,peer_ones},8'd0};
+                    len=15; x0=18;
                 end else if(py>=52 && py<=56 && over_ready) begin
                     line_on=1; str={"CLICK TO PLAY",24'd0}; len=13; x0=22; y0=52; color=HINT;
                 end
@@ -92,6 +107,10 @@ module menu_screens #(parameter ENABLE_2P = 0)(
                     end else begin
                         str={"WAVE ",8'd48+{4'd0,wave_ones},80'd0}; len=6; x0=37;
                     end
+                end else if(py>=40 && py<=44 && show_peer) begin
+                    line_on=1; y0=40; color = peer_in_run ? GREEN : GREY;
+                    str={"PARTNER WAVE ",8'd48+{4'd0,peer_tens},8'd48+{4'd0,peer_ones},8'd0};
+                    len=15; x0=18;
                 end else if(py>=52 && py<=56 && over_ready) begin
                     line_on=1; str={"CLICK TO RETRY",16'd0}; len=14; x0=20; y0=52; color=HINT;
                 end

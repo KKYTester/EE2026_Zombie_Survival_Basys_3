@@ -28,12 +28,19 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
     // Menu snapshot.
     input wire menu_sel, input wire [6:0] cursor_x, input wire [5:0] cursor_y,
     input wire [5:0] progress, input wire over_ready,
+    // Two boards: link status on the title, the other board's wave on the
+    // end screens of a 2-player run.
+    input wire link_up, input wire two_player,
+    input wire [6:0] peer_wave, input wire peer_in_run,
+    input wire show_partner,          // p2_addr = the other player's tile (yellow)
     output wire [15:0] pixel_out);
     wire playing = game_state==3'd3;
     // Menu screen numbers: 0 title, 1 generating, 2 reserved, 3 game over, 4 victory.
     wire [2:0] menu_screen = (game_state==3'd4) ? 3'd3 : (game_state==3'd5) ? 3'd4 : game_state;
     wire [3:0] wave_tens,wave_ones;
     wave_digits end_screen_digits(.value(wave),.tens(wave_tens),.ones(wave_ones));
+    wire [3:0] peer_tens,peer_ones;
+    wave_digits peer_digits(.value(peer_wave),.tens(peer_tens),.ones(peer_ones));
     wire [15:0] gun_pixel_data,hud_pixel_data,ammo_pixel_data,map_pixel_data,zombie_pixel_data,play_pixel_data,menu_pixel_data;
     weapon_overlay gun(.px(px),.py(py),.show(!minimap_mode),.recoil(weapon_recoil),.flash(weapon_flash),
         .drop(weapon_drop),.pixel_in(world_pixel),.pixel_out(gun_pixel_data));
@@ -46,9 +53,8 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
         .fp_pixel_data(ammo_pixel_data),.map_bits(map_bits),.p1_addr(p1_addr),
         .p2_addr(p2_addr),.player_x(player_x),.player_y(player_y),.player_angle(player_angle),
         .seed(seed),.map_ready(map_ready),
-        // Player 2's yellow tile only in a 2P game: game_flow clears menu_sel
-        // when 1P starts, and it can only be 1 when ENABLE_2P is set.
-        .show_p2(ENABLE_2P!=0 && menu_sel),
+        // The other player's tile, while both boards play the same map.
+        .show_p2(show_partner),
         .busy(map_busy),.bfs_enabled(STAGE==3),.error_code(error_code),
         .pixel_data(map_pixel_data));
     zombie_overlay #(.USE_FRACTIONAL_POSITIONS(FRACTIONAL_ENEMIES)) zombie_dots(
@@ -60,6 +66,8 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
     menu_screens #(.ENABLE_2P(ENABLE_2P)) menu(.px(px),.py(py),.screen(menu_screen),
         .sel(menu_sel),.cursor_x(cursor_x),.cursor_y(cursor_y),.show_cursor(SHOW_CURSOR!=0),
         .progress(progress),.wave_tens(wave_tens),
-        .wave_ones(wave_ones),.over_ready(over_ready),.pixel(menu_pixel_data));
+        .wave_ones(wave_ones),.over_ready(over_ready),
+        .link_up(link_up),.show_peer(two_player),.peer_tens(peer_tens),.peer_ones(peer_ones),
+        .peer_in_run(peer_in_run),.pixel(menu_pixel_data));
     assign pixel_out = playing ? play_pixel_data : menu_pixel_data;
 endmodule

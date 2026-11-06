@@ -18,6 +18,7 @@
 // All signals are in the 100 MHz clk domain; rst is synchronous, active high.
 module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     parameter ENABLE_2P=0, parameter SHOW_CURSOR=1,
+    parameter [15:0] FIXED_MAP_SEED=16'h0000,
     parameter GEN_SHIFT=26, parameter OVER_SHIFT=27,
     parameter TINT_SHIFT=25, parameter BLINK_SHIFT=24,
     parameter SPAWN_SHIFT=26, parameter CLEAR_SHIFT=27,
@@ -26,6 +27,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     input wire clk, input wire rst,
     // Board
     input wire btn_c,                             // raw button, debounced here
+    input wire btn_d,                             // one-clock title-menu selection pulse
     input wire sw_map,                            // raw switch: map overlay
     output wire [7:0] oled_jb,                    // Pmod OLEDrgb on JB
     output wire [6:0] seg, output wire dp, output wire [3:0] an,
@@ -41,6 +43,19 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     // Game state
     output wire [2:0] game_state, output wire play_start,
     output wire [6:0] wave, output wire [1:0] health,
+    output wire selected_2p,                      // title selection
+    // Two-board play (ENABLE_2P): each board plays its own game on the same
+    // map. Inputs are the other board's status (see game_flow); outputs are
+    // this board's role for the status it sends back.
+    input wire link_up,
+    input wire [2:0] peer_state, input wire peer_2p, input wire peer_leader,
+    input wire [7:0] peer_token, input wire [15:0] peer_priority,
+    input wire [15:0] peer_seed,
+    input wire [6:0] peer_wave, input wire peer_in_run,  // shown on end screens
+    input wire [7:0] partner_tile,                // other player's tile ({y,x}, y down)
+    input wire partner_visible,                   // draw it on the SW0 map
+    output wire two_player, output wire leader,
+    output wire [7:0] game_token, output wire [15:0] start_priority,
     // Player (Member 1)
     input wire [7:0] player_tile,                 // {y,x} tile the player stands on
     // Player position for the minimap: tiles with 4 fractional bits, y down
@@ -96,6 +111,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     wire playing_now = flow_state==3'd3;
     assign map_ready=ready; assign map_busy=busy; assign active_seed=seed;
     assign game_state=flow_state;
+    assign selected_2p=menu_sel;
     assign enemies_clear = play_start || !playing_now;
     // Fire: a new left-click or btnC during play. The menu never sees play clicks.
     reg mouse_left_prev, mouse_right_prev;
@@ -113,15 +129,25 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     // Free-running seed source: the time spent on the title screen picks the map.
     reg [15:0] seed_counter;
     always @(posedge clk) if(rst) seed_counter<=1; else seed_counter<=seed_counter+1'b1;
+    // A board joining a 2-player game builds the leader's map from its seed.
+    wire use_peer_seed;
+    wire [15:0] generator_seed = use_peer_seed ? peer_seed :
+                                 (FIXED_MAP_SEED==16'h0000) ? seed_counter : FIXED_MAP_SEED;
     game_flow #(.ENABLE_2P(ENABLE_2P),.GEN_SHIFT(GEN_SHIFT),
         .OVER_SHIFT(OVER_SHIFT)) flow(
-        .clk(clk),.rst(rst),.btn_c(press_c),.btn_l(1'b0),.btn_r(1'b0),
+        .clk(clk),.rst(rst),.btn_c(press_c),.btn_d(btn_d),.btn_l(1'b0),.btn_r(1'b0),
         .mouse_x(mouse_x),.mouse_y(mouse_y),.mouse_left(mouse_left),.mouse_event(mouse_event),
         .map_ready(ready),.map_busy(busy),.health_zero(health==2'd0),.game_won(game_won),
+        .random(seed_counter),.link_up(link_up),
+        .peer_state(peer_state),.peer_2p(peer_2p),.peer_leader(peer_leader),
+        .peer_token(peer_token),.peer_priority(peer_priority),
+        .two_player(two_player),.leader(leader),.token(game_token),
+        .start_priority(start_priority),.use_peer_seed(use_peer_seed),
         .state(flow_state),.sel(menu_sel),.regenerate(regenerate),.play_start(play_start),
         .progress(progress),.over_ready(over_ready));
     player_health hearts(.clk(clk),.rst(rst),.play_start(play_start),
         .playing(playing_now),.hit(player_hit),.health(health),.damage(damage));
+    // Only the host spawns zombies; the Player 2 board shows the host's waves.
     wave_controller #(.SPAWN_SHIFT(SPAWN_SHIFT),.CLEAR_SHIFT(CLEAR_SHIFT),.WIN_WAVE(WIN_WAVE)) waves(
         .clk(clk),.rst(rst),.play_start(play_start),.playing(playing_now),
         .map_bits(published_map),.occupied(USE_SPAWN_OCCUPANCY ? spawn_occupied : zombies),
@@ -140,7 +166,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .ammo(ammo),.reloading(weapon_reloading),.drop(weapon_drop),
         .state(weapon_state),.reload_phase(reload_phase));
     map_system #(.STAGE(STAGE)) core(.clk(clk),.rst(rst),.regenerate(regenerate),
-        .seed_in(seed_counter),.published_map(published_map),.p1_addr(p1_addr),
+        .seed_in(generator_seed),.published_map(published_map),.p1_addr(p1_addr),
         .p2_addr(p2_addr),.map_ready(ready),.busy(busy),.error_code(error_code),
         .active_seed(seed),.retry_count(retry_count));
     assign led={busy,11'b0,error_code,ready};
@@ -215,6 +241,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     reg [2:0] frame_error;
     reg [2:0] frame_screen;
     reg frame_sel,frame_tint,frame_blink,frame_over_ready;
+    reg frame_link,frame_two_player,frame_peer_in_run,frame_partner;
+    reg [6:0] frame_peer_wave;
     reg [6:0] frame_cx; reg [5:0] frame_cy;
     reg [5:0] frame_progress;
     // Related clocks, explicitly constrained in XDC, not asynchronous CDC.
@@ -231,17 +259,24 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
             frame_screen<=0; frame_sel<=0;
             frame_cx<=48; frame_cy<=40; frame_progress<=0;
             frame_tint<=0; frame_blink<=0; frame_over_ready<=0;
+            frame_link<=0; frame_two_player<=0; frame_peer_in_run<=0; frame_peer_wave<=0;
+            frame_partner<=0;
         end else if(oled_frame_begin) begin
-            frame_map<=published_map; frame_p1<=playing_now ? player_tile : p1_addr; frame_p2<=p2_addr;
+            frame_map<=published_map; frame_p1<=playing_now ? player_tile : p1_addr;
+            frame_p2<=partner_tile; frame_partner<=partner_visible && playing_now;
             frame_pos_x<=player_pos_x; frame_pos_y<=player_pos_y; frame_angle<=player_angle;
-            frame_health<=health; frame_wave<=wave;
+            frame_health<=health;
+            frame_wave<=wave;
             frame_remaining<=remaining; frame_zombies<=zombies;
             frame_zombie_active<=zombie_active; frame_zombie_x<=zombie_x; frame_zombie_y<=zombie_y;
             frame_flash<=weapon_flash; frame_recoil<=weapon_recoil;
             frame_reloading<=weapon_reloading; frame_ammo<=ammo; frame_drop<=weapon_drop;
             frame_seed<=seed; frame_ready<=ready; frame_busy<=busy;
             frame_mode<=switch_sync[1]; frame_error<=error_code;
-            frame_screen<=flow_state; frame_sel<=menu_sel;
+            frame_screen<=flow_state;
+            frame_sel<=menu_sel;
+            frame_link<=link_up; frame_two_player<=two_player;
+            frame_peer_in_run<=peer_in_run; frame_peer_wave<=peer_wave;
             frame_cx<=mouse_x; frame_cy<=mouse_y; frame_progress<=progress;
             frame_tint<=tint; frame_blink<=low_blink;
             frame_over_ready<=over_ready;
@@ -262,7 +297,10 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .weapon_recoil(frame_recoil),.weapon_flash(frame_flash),.weapon_reloading(frame_reloading),
         .ammo(frame_ammo),.weapon_drop(frame_drop),
         .menu_sel(frame_sel),.cursor_x(frame_cx),.cursor_y(frame_cy),
-        .progress(frame_progress),.over_ready(frame_over_ready),.pixel_out(pixel_data));
+        .progress(frame_progress),.over_ready(frame_over_ready),
+        .link_up(frame_link),.two_player(frame_two_player),
+        .peer_wave(frame_peer_wave),.peer_in_run(frame_peer_in_run),
+        .show_partner(frame_partner),.pixel_out(pixel_data));
 
     // The course OLED driver omits (95,63); the bridge sends this same composition.
     pixel_compositor #(.STAGE(STAGE),.ENABLE_2P(ENABLE_2P),.SHOW_CURSOR(SHOW_CURSOR),
@@ -278,7 +316,10 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .weapon_recoil(frame_recoil),.weapon_flash(frame_flash),.weapon_reloading(frame_reloading),
         .ammo(frame_ammo),.weapon_drop(frame_drop),
         .menu_sel(frame_sel),.cursor_x(frame_cx),.cursor_y(frame_cy),
-        .progress(frame_progress),.over_ready(frame_over_ready),.pixel_out(last_pixel_data));
+        .progress(frame_progress),.over_ready(frame_over_ready),
+        .link_up(frame_link),.two_player(frame_two_player),
+        .peer_wave(frame_peer_wave),.peer_in_run(frame_peer_in_run),
+        .show_partner(frame_partner),.pixel_out(last_pixel_data));
 
     wire raw_cs,raw_sdin,raw_sclk,raw_dcn;
     Oled_Display oled(.clk(oled_clk),.reset(oled_reset),.frame_begin(oled_frame_begin),

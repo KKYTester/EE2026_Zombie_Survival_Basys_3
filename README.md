@@ -35,7 +35,7 @@ ignored by Git.
    - Top module: `My_Top_Module`.
    - Sources: all `.v`, `.sv`, `.vhd`, `.vhdl`, `.vh`, and `.svh` files under
      `FDP2026.srcs/sources_1/new/`, including subfolders.
-   - Constraints: `Basys3_Master.xdc`.
+   - Constraints: the Basys 3 master pins plus the multiplayer and aim pins.
 
 ### Reopen or regenerate the project
 
@@ -72,61 +72,67 @@ recursively, and the hardware validation script uses the grouped paths.
 See [DeveloperGuide.md](DeveloperGuide.md) for prototype details, controls,
 rendering, and validation instructions.
 
-## Integrated random-map game
+## Game and two-board play
 
-`My_Top_Module` combines the map, game flow and UI with the raycaster and player
-controller. Starting with btnC or clicking the enabled 1-player title option
-generates a validated random map and shows its 3D walls behind the existing
-weapon and HUD. The host enemy manager supplies flow-field navigation, contact
-attacks, camera-directed shooting and first-person zombie sprites.
+`My_Top_Module` is the whole game: Fawaz map generator, title/HUD/OLED
+pipeline, raycaster, flow-field zombie AI, camera-ray combat and first-person
+zombie sprites. Every board gets the **same bitstream**; there are no roles.
 
-### Fawaz integration branch
+### Build and program
 
-This branch combines main at `83d2f9a` with the enemy subsystem from
-`fawaz-zombie-ai` at `368fb7f`. It uses the live Q12 player pose and camera
-angle, converting the map orientation at the enemy/renderer boundary.
+In Vivado's Tcl Console run `create_project.tcl` (or
+`create_zombie_multiplayer.tcl`), then Synthesis, Implementation and Generate
+Bitstream. Program the same bitstream onto every board.
 
-To create a separate Vivado project, close the currently open project and run
-these commands in the Tcl Console:
-
-```tcl
-set ::ee2026_project_name FDP2026_EnemyIntegration
-source {E:/EE2026/EE2026_Zombie_Survival_Basys_3/create_project.tcl}
-unset ::ee2026_project_name
-```
-
-Open `build/FDP2026_EnemyIntegration/FDP2026_EnemyIntegration.xpr` on later
-sessions. The script includes the enemy design files recursively and uses
-`My_Top_Module` with the master XDC. Build reports and board checks for this
-integration are still required.
-
-### Run the integrated game
-
-`My_Top_Module` is the only board top. The standalone map preview and its
-alternate constraints have been removed. In an existing Vivado project, remove
-the old `demo/` sources and preview/aim constraints, then add the `enemy/`
-design sources and `ui/switch_toggle.v`, or regenerate the project as described above.
-
-Use the default top `My_Top_Module` and `Basys3_Master.xdc`; no alternate pin file
-is needed. Regenerate the project or add all new design sources recursively to
-an existing project. The project script sets the source-root include directory
-for `Game_Config.vh` and `Ray_Tables.vh`. The OLED stays on JB and `game_core`
-owns the only OLED driver and the final-pixel bridge.
+### Controls (every board)
 
 | Control | Action |
 |---|---|
-| Mouse + left-click on 1 PLAYER, or btnC | Start from the title |
-| btnU / btnD | Move forward / backward relative to the view |
-| btnL / btnR | Strafe left / right |
-| Mouse horizontal movement during play | Turn continuously, one count per 1/1024 turn |
-| Left-click or btnC during play | Fire the pistol |
-| Right-click during play | Reload |
-| SW0 | Toggle the full map overlay; player marker follows movement |
+| Mouse move | Turn (menu cursor on the title) |
+| BTN-U / BTN-D / BTN-L / BTN-R | Walk forward / back / strafe left / strafe right |
+| Left-click or BTN-C | Fire; click/BTN-C also confirms menus |
+| Right-click | Reload |
+| BTN-D on the title | Toggle 1 PLAYER / 2 PLAYERS |
+| SW0 | Toggle the full map overlay |
 | SW13 / SW14, each flip | Test damage / defeat the lowest active zombie slot |
 | SW15 up, then down | Reset to title |
-| Seven-segment display | Active map seed |
+| Seven-segment display | Map seed; in a 2-player game: own wave (left) and partner wave (right) |
+| LED15 / LED14-12 | Link up / partner's hearts during a 2-player game |
 
-The 2-player option stays disabled. Menus, generating screen, hearts, ten waves,
+### One player
+
+Pick **1 PLAYER** and click (or BTN-C). No second board is needed and a new
+random map is used each game.
+
+### Two players
+
+Connect JC1 (TX, K17) of each board to JC2 (RX, M18) of the other, and GND to
+GND. LED15 and `LINKED` on the title show the link is up.
+
+Each board plays its **own complete game** (own zombies, waves, hearts, gun
+and controls) on the **same map**, like a survival race:
+
+1. On either board select **2 PLAYERS** and start. Without the link the title
+   shows `NO LINK TO P2` and will not start.
+2. The other board, if it is on its title screen, joins automatically: it
+   builds the same map from the starting board's seed and starts its own run.
+   If both boards start at the same moment, one of them is picked to choose
+   the map and the other joins it.
+3. While both of you are playing you can see your partner: a blue-shirted
+   figure in your 3D view (hidden behind walls like the zombies) and a yellow
+   tile on the SW0 map. The seven-segment display shows your wave and your
+   partner's wave, and LED14-12 show your partner's hearts. Zombies are not
+   shared: each board's zombies only chase that board's player.
+4. Each run ends on its own (game over or victory); the other board keeps
+   playing. The end screen shows `PARTNER WAVE nn` (green while the partner
+   is still playing).
+
+The link only carries a status word every 20 ms (state, 2-player flag,
+leader flag, game token, start priority, map seed, wave, hearts, position and
+view angle). See
+[docs/multiplayer-link.md](docs/multiplayer-link.md).
+
+Menus, generating screen, hearts, ten waves,
 weapon animation/ammo/reload, damage effects, victory/game-over screens and
 return-to-title behavior are integrated into the game. Accepted shots trace from
 the actual player pose at the camera angle. The first zombie before a wall takes
@@ -178,8 +184,6 @@ renderers snapshot the same pose, prepare the back bank, and publish together.
 Sprite depth and wall depth use perpendicular camera distance. Horizontal sprite
 projection uses a pinhole approximation to the renderer's evenly spaced angle
 columns, so placement near the edges may differ by a small number of pixels.
-The two-player enemy interface remains opt-in and still needs the team's
-per-player health/weapon and UART integration.
 
 The generated map and UI use `{y,x}`, x right and y down, 1 wall / 0 floor.
 The integration reverses rows for the existing north-increasing renderer/player
