@@ -18,6 +18,7 @@
 // All signals are in the 100 MHz clk domain; rst is synchronous, active high.
 module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     parameter ENABLE_2P=0, parameter SHOW_CURSOR=1,
+    parameter [15:0] FIXED_MAP_SEED=16'h0000,
     parameter GEN_SHIFT=26, parameter OVER_SHIFT=27,
     parameter TINT_SHIFT=25, parameter BLINK_SHIFT=24,
     parameter SPAWN_SHIFT=26, parameter CLEAR_SHIFT=27,
@@ -25,7 +26,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     parameter WIN_WAVE=10)(
     input wire clk, input wire rst,
     // Board
-    input wire btn_c,                             // raw button, debounced here
+    input wire btn_c, input wire btn_l,           // raw buttons, debounced here
+    input wire btn_d,                             // one-clock title-menu selection pulse
     input wire sw_map,                            // raw switch: map overlay
     output wire [7:0] oled_jb,                    // Pmod OLEDrgb on JB
     output wire [6:0] seg, output wire dp, output wire [3:0] an,
@@ -41,6 +43,13 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     // Game state
     output wire [2:0] game_state, output wire play_start,
     output wire [6:0] wave, output wire [1:0] health,
+    output wire selected_2p,
+    input wire display_override_enable,
+    input wire [2:0] display_game_state_override,
+    input wire [6:0] display_wave_override,
+    input wire [1:0] display_health_override,
+    input wire display_selected_2p_override,
+    input wire teammate_dead,
     // Player (Member 1)
     input wire [7:0] player_tile,                 // {y,x} tile the player stands on
     // Player position for the minimap: tiles with 4 fractional bits, y down
@@ -48,6 +57,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     // clockwise. {player_pos_y[7:4], player_pos_x[7:4]} should equal player_tile.
     input wire [7:0] player_pos_x, input wire [7:0] player_pos_y,
     input wire [9:0] player_angle,
+    input wire [7:0] player2_tile,
     // Display (Members 1 and 2)
     input wire [15:0] world_pixel,
     output wire [6:0] pixel_x, output wire [5:0] pixel_y,
@@ -74,9 +84,11 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
 
     // ---------------- Buttons ----------------
     // btnU/btnL/btnR/btnD are left free for Member 1's movement controls.
-    wire press_c;
+    wire press_c,press_l;
     button_debounce #(.STABLE_CYCLES(DEBOUNCE_CYCLES)) button_filter(
         .clk(clk),.rst(rst),.button(btn_c),.pressed(press_c));
+    button_debounce #(.STABLE_CYCLES(DEBOUNCE_CYCLES)) button_left(
+        .clk(clk),.rst(rst),.button(btn_l),.pressed(press_l));
 
     // ---------------- Game flow, map and play state ----------------
     wire ready,busy;
@@ -93,6 +105,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     wire playing_now = flow_state==3'd3;
     assign map_ready=ready; assign map_busy=busy; assign active_seed=seed;
     assign game_state=flow_state;
+    assign selected_2p=menu_sel;
     assign enemies_clear = play_start || !playing_now;
     // Fire: a new left-click or btnC during play. The menu never sees play clicks.
     reg mouse_left_prev, mouse_right_prev;
@@ -102,7 +115,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     end
     wire fire_request = playing_now && (press_c || (mouse_left && !mouse_left_prev));
     // Reload: a new right-click during play (no button, so btnL stays free for movement).
-    wire reload_request = playing_now && mouse_right && !mouse_right_prev;
+    wire reload_request = playing_now && (press_l || (mouse_right && !mouse_right_prev));
     wire weapon_flash, weapon_recoil, weapon_reloading;
     wire [2:0] ammo;
     wire [4:0] weapon_drop;
@@ -110,11 +123,12 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     // Free-running seed source: the time spent on the title screen picks the map.
     reg [15:0] seed_counter;
     always @(posedge clk) if(rst) seed_counter<=1; else seed_counter<=seed_counter+1'b1;
+    wire [15:0] generator_seed = (FIXED_MAP_SEED==16'h0000) ? seed_counter : FIXED_MAP_SEED;
     game_flow #(.ENABLE_2P(ENABLE_2P),.GEN_SHIFT(GEN_SHIFT),
         .OVER_SHIFT(OVER_SHIFT)) flow(
-        .clk(clk),.rst(rst),.btn_c(press_c),.btn_l(1'b0),.btn_r(1'b0),
+        .clk(clk),.rst(rst),.btn_c(press_c),.btn_d(btn_d),.btn_l(1'b0),.btn_r(1'b0),
         .mouse_x(mouse_x),.mouse_y(mouse_y),.mouse_left(mouse_left),.mouse_event(mouse_event),
-        .map_ready(ready),.map_busy(busy),.health_zero(health==2'd0),.game_won(game_won),
+        .map_ready(ready),.map_busy(busy),.health_zero((health==2'd0)||teammate_dead),.game_won(game_won),
         .state(flow_state),.sel(menu_sel),.regenerate(regenerate),.play_start(play_start),
         .progress(progress),.over_ready(over_ready));
     player_health hearts(.clk(clk),.rst(rst),.play_start(play_start),
@@ -136,7 +150,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .ammo(ammo),.reloading(weapon_reloading),.drop(weapon_drop),
         .state(weapon_state),.reload_phase(reload_phase));
     map_system #(.STAGE(STAGE)) core(.clk(clk),.rst(rst),.regenerate(regenerate),
-        .seed_in(seed_counter),.published_map(published_map),.p1_addr(p1_addr),
+        .seed_in(generator_seed),.published_map(published_map),.p1_addr(p1_addr),
         .p2_addr(p2_addr),.map_ready(ready),.busy(busy),.error_code(error_code),
         .active_seed(seed),.retry_count(retry_count));
     assign led={busy,11'b0,error_code,ready};
@@ -225,15 +239,18 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
             frame_cx<=48; frame_cy<=40; frame_progress<=0;
             frame_tint<=0; frame_blink<=0; frame_over_ready<=0;
         end else if(oled_frame_begin) begin
-            frame_map<=published_map; frame_p1<=playing_now ? player_tile : p1_addr; frame_p2<=p2_addr;
+            frame_map<=published_map; frame_p1<=playing_now ? player_tile : p1_addr;
+            frame_p2<=playing_now ? player2_tile : p2_addr;
             frame_pos_x<=player_pos_x; frame_pos_y<=player_pos_y; frame_angle<=player_angle;
-            frame_health<=health; frame_wave<=wave;
+            frame_health<=display_override_enable ? display_health_override : health;
+            frame_wave<=display_override_enable ? display_wave_override : wave;
             frame_remaining<=remaining; frame_zombies<=zombies;
             frame_flash<=weapon_flash; frame_recoil<=weapon_recoil;
             frame_reloading<=weapon_reloading; frame_ammo<=ammo; frame_drop<=weapon_drop;
             frame_seed<=seed; frame_ready<=ready; frame_busy<=busy;
             frame_mode<=switch_sync[1]; frame_error<=error_code;
-            frame_screen<=flow_state; frame_sel<=menu_sel;
+            frame_screen<=display_override_enable ? display_game_state_override : flow_state;
+            frame_sel<=display_override_enable ? display_selected_2p_override : menu_sel;
             frame_cx<=mouse_x; frame_cy<=mouse_y; frame_progress<=progress;
             frame_tint<=tint; frame_blink<=low_blink;
             frame_over_ready<=over_ready;

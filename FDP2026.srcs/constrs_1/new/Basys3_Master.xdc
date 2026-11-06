@@ -8,7 +8,7 @@ set_property -dict { PACKAGE_PIN W5   IOSTANDARD LVCMOS33 } [get_ports clk]
 create_clock -add -name sys_clk_pin -period 10.00 -waveform {0 5} [get_ports clk]
 # Existing divider toggles every 8 board clocks. First rise is on the eighth
 # board rising edge, 70 ns after the first board edge (source edge 15).
-create_generated_clock -name oled_clk -source [get_ports clk] -edges {15 31 47} [get_pins {game/clk_div_reg[3]/Q}]
+create_generated_clock -name oled_clk -source [get_ports clk] -edges {15 31 47} [get_pins {multiplayer_game/game/clk_div_reg[3]/Q}]
 
 
 ## Switches

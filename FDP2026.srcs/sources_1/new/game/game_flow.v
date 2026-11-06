@@ -3,9 +3,8 @@
 //   TITLE -> GENERATING -> PLAYING -> GAME OVER -> TITLE
 //                                 \-> VICTORY  -> TITLE
 //  - Title: mouse hover highlights an option, left-click on it confirms.
-//    Buttons work too: btnL/btnR move the selection, btnC confirms.
-//  - The 2-player option is shown but disabled unless ENABLE_2P = 1
-//    (two-player flow is not implemented yet).
+//    BTN-D toggles the selection and BTN-C confirms it.
+//  - BTN-D toggles the highlighted player mode when ENABLE_2P = 1.
 //  - Confirming consumes the press: it never reaches the playing state.
 //  - Generating: requests one new map (the seed is whatever the free-running
 //    counter holds at that moment) and shows the screen for at least
@@ -18,7 +17,7 @@
 module game_flow #(parameter ENABLE_2P = 0, parameter GEN_SHIFT = 26,
                    parameter OVER_SHIFT = 27)(
     input wire clk, input wire rst,
-    input wire btn_c, input wire btn_l, input wire btn_r,   // one-clock pulses
+    input wire btn_c, input wire btn_d, input wire btn_l, input wire btn_r, // one-clock pulses
     input wire [6:0] mouse_x, input wire [5:0] mouse_y,
     input wire mouse_left, input wire mouse_event,
     input wire map_ready, input wire map_busy,
@@ -56,10 +55,9 @@ module game_flow #(parameter ENABLE_2P = 0, parameter GEN_SHIFT = 26,
                 S_TITLE: begin
                     if(mouse_event && over_1p) sel<=0;
                     if(mouse_event && over_2p) sel<=1;
-                    if(ENABLE_2P && (btn_l || btn_r)) sel<=~sel;
-                    // Two-player start is not implemented: only 1P can be confirmed.
-                    if((btn_c && sel==0) || (click_confirm && click_sel==0)) begin
-                        sel<=0; state<=S_GEN; timer<=0; requested<=0; seen_busy<=0;
+                    if(ENABLE_2P && btn_d) sel<=~sel;
+                    if(btn_c || click_confirm) begin
+                        state<=S_GEN; timer<=0; requested<=0; seen_busy<=0;
                     end
                 end
                 S_GEN: begin

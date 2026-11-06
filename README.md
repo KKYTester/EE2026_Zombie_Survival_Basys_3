@@ -35,7 +35,7 @@ ignored by Git.
    - Top module: `My_Top_Module`.
    - Sources: all `.v`, `.sv`, `.vhd`, `.vhdl`, `.vh`, and `.svh` files under
      `FDP2026.srcs/sources_1/new/`, including subfolders.
-   - Constraints: `Basys3_Master.xdc`.
+   - Constraints: the Basys 3 master pins plus the multiplayer and aim pins.
 
 ### Reopen or regenerate the project
 
@@ -72,55 +72,48 @@ recursively, and the hardware validation script uses the grouped paths.
 See [DeveloperGuide.md](DeveloperGuide.md) for prototype details, controls,
 rendering, and validation instructions.
 
-## Integrated random-map game
+## Two-board zombie game
 
-`My_Top_Module` combines the map, game flow and UI with the raycaster and player
-controller. Starting with btnC or clicking the enabled 1-player title option
-generates a validated random map and shows its 3D walls behind the existing
-weapon and HUD. The host enemy manager supplies flow-field navigation, contact
-attacks, camera-directed shooting and first-person zombie sprites.
+`My_Top_Module` keeps the Fawaz map generator, title/HUD/OLED pipeline, raycaster,
+flow-field zombie AI, combat, and first-person zombie sprites. It adds a UART
+host/client link so two Basys 3 boards can play the same seeded map, each showing
+its own player's view. The host simulates the shared zombies and sends player
+positions, health, wave state, and zombie positions to the client.
 
-### Fawaz integration branch
+### Build and program both boards
 
-This branch combines main at `83d2f9a` with the enemy subsystem from
-`fawaz-zombie-ai` at `368fb7f`. It uses the live Q12 player pose and camera
-angle, converting the map orientation at the enemy/renderer boundary.
-
-To create a separate Vivado project, close the currently open project and run
-these commands in the Tcl Console:
+In Vivado's Tcl Console, create the standalone multiplayer project from this
+checkout:
 
 ```tcl
-set ::ee2026_project_name FDP2026_EnemyIntegration
-source {E:/EE2026/EE2026_Zombie_Survival_Basys_3/create_project.tcl}
-unset ::ee2026_project_name
+source {D:/path/to/EE2026_Zombie_Survival_Basys_3/create_zombie_multiplayer.tcl}
 ```
 
-Open `build/FDP2026_EnemyIntegration/FDP2026_EnemyIntegration.xpr` on later
-sessions. The script includes the enemy design files recursively and uses
-`My_Top_Module` with the master XDC. Build reports and board checks for this
-integration are still required.
+Set `My_Top_Module` as the top if Vivado did not select it automatically, then
+run Synthesis, Implementation, and Generate Bitstream. Program both Basys 3
+boards with the same bitstream. The project includes the Basys 3/OLED pin map,
+the UART pins, and the player switch constraints.
 
-### Run the integrated game
-
-`My_Top_Module` is the only board top. The standalone map preview and its
-alternate constraints have been removed. In an existing Vivado project, remove
-the old `demo/` sources and preview/aim constraints, then add the `enemy/`
-design sources and `ui/switch_toggle.v`, or regenerate the project as described above.
-
-Use the default top `My_Top_Module` and `Basys3_Master.xdc`; no alternate pin file
-is needed. Regenerate the project or add all new design sources recursively to
-an existing project. The project script sets the source-root include directory
-for `Game_Config.vh` and `Ray_Tables.vh`. The OLED stays on JB and `game_core`
-owns the only OLED driver and the final-pixel bridge.
+Connect each board's JC1/TX (K17) to the other board's JC2/RX (M18), and connect
+GND to GND. Both boards still need their own USB power/programming connection.
+Set SW3 high on the host and low on the client. LED15 indicates the UART link.
+On both boards, press BTN-D until the title highlights **2 PLAYERS**, then press
+BTN-C to start. Wait for map generation to finish on both OLEDs.
 
 | Control | Action |
 |---|---|
-| Mouse + left-click on 1 PLAYER, or btnC | Start from the title |
-| btnU / btnD | Move forward / backward relative to the view |
-| btnL / btnR | Strafe left / right |
-| Mouse horizontal movement during play | Turn continuously, one count per 1/1024 turn |
-| Left-click or btnC during play | Fire the pistol |
-| Right-click during play | Reload |
+| SW4 / SW5 / SW6 / SW7 | Move north / south / west / east one tile at a time |
+| SW1 / SW2 | Aim east / south / west / north (binary setting 00 / 01 / 10 / 11) |
+| BTN-C | Start the game from title; fire while playing |
+| BTN-L | Reload |
+| BTN-D | Toggle 1-player / 2-player selection on title |
+| BTN-U | Reset that board |
+| SW0 | Toggle the minimap |
+
+The client sends its controls to the host; the host runs the shared enemy AI and
+returns world state. The game uses cardinal, tile-step movement on the two-board
+setup so each board can control a player independently. Either player's health
+reaching zero ends the shared run. BTN-R is intentionally unused in gameplay.
 | SW0 | Toggle the full map overlay; player marker follows movement |
 | SW13 / SW14, each flip | Test damage / defeat the lowest active zombie slot |
 | SW15 up, then down | Reset to title |
