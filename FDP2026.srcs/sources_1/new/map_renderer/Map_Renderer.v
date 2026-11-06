@@ -8,7 +8,8 @@ module Map_Renderer #(
     parameter integer PIXEL_UPDATE_HZ = 25_000_000,
     parameter [255:0] MAP = `GAME_MAP,
     parameter USE_RUNTIME_MAP = 0,
-    parameter USE_PIXEL_COORDS = 0
+    parameter USE_PIXEL_COORDS = 0,
+    parameter USE_ENEMY_OVERLAY = 0
 ) (
     input wire clk, reset,
     input wire [255:0] map_bits,
@@ -19,7 +20,9 @@ module Map_Renderer #(
     input wire [6:0] pixel_x,
     input wire [5:0] pixel_y,
     output reg [15:0] pixel_data,
-    output wire [9:0] column_depth // perpendicular depth, in 1/32-cell units
+    output wire [9:0] column_depth, // perpendicular depth, in 1/32-cell units
+    input wire overlay_ready,
+    output wire scene_start, display_bank, scene_valid
 );
     localparam integer GAME_CYCLES = (CLK_HZ + GAME_HZ/2) / GAME_HZ;
     localparam integer PIXEL_CYCLES = (CLK_HZ + PIXEL_UPDATE_HZ/2) / PIXEL_UPDATE_HZ;
@@ -59,6 +62,8 @@ module Map_Renderer #(
     endfunction
     reg write_bank, request_toggle;
     reg front_bank, acknowledge_toggle, display_valid;
+    assign display_bank=front_bank;
+    assign scene_valid=display_valid;
     (* ASYNC_REG = "TRUE" *) reg request_meta, request_sync;
     (* ASYNC_REG = "TRUE" *) reg acknowledge_meta, acknowledge_sync;
     always @(posedge display_clk) begin
@@ -91,6 +96,7 @@ module Map_Renderer #(
     `include "Ray_Tables.vh"
     localparam [2:0] SNAPSHOT=0, LAUNCH=1, WAIT_RAY=2, PUBLISH=3, WAIT_SWAP=4, IDLE=5;
     reg [2:0] state;
+    assign scene_start = !reset && state==SNAPSHOT;
     reg [6:0] column;
     reg signed [17:0] frame_x, frame_y;
     reg [9:0] frame_angle;
@@ -143,7 +149,7 @@ module Map_Renderer #(
                         state <= LAUNCH;
                     end
                 end
-                PUBLISH: begin
+                PUBLISH: if(!USE_ENEMY_OVERLAY || overlay_ready) begin
                     request_toggle <= ~request_toggle;
                     state <= WAIT_SWAP;
                 end

@@ -77,14 +77,35 @@ rendering, and validation instructions.
 `My_Top_Module` combines the map, game flow and UI with the raycaster and player
 controller. Starting with btnC or clicking the enabled 1-player title option
 generates a validated random map and shows its 3D walls behind the existing
-weapon and HUD. Enemy AI and combat targeting still use a temporary stub.
+weapon and HUD. The host enemy manager supplies flow-field navigation, contact
+attacks, camera-directed shooting and first-person zombie sprites.
+
+### Fawaz integration branch
+
+This branch combines main at `83d2f9a` with the enemy subsystem from
+`fawaz-zombie-ai` at `368fb7f`. It uses the live Q12 player pose and camera
+angle, converting the map orientation at the enemy/renderer boundary.
+
+To create a separate Vivado project, close the currently open project and run
+these commands in the Tcl Console:
+
+```tcl
+set ::ee2026_project_name FDP2026_EnemyIntegration
+source {E:/EE2026/EE2026_Zombie_Survival_Basys_3/create_project.tcl}
+unset ::ee2026_project_name
+```
+
+Open `build/FDP2026_EnemyIntegration/FDP2026_EnemyIntegration.xpr` on later
+sessions. The script includes the enemy design files recursively and uses
+`My_Top_Module` with the master XDC. Build reports and board checks for this
+integration are still required.
 
 ### Run the integrated game
 
 `My_Top_Module` is the only board top. The standalone map preview and its
 alternate constraints have been removed. In an existing Vivado project, remove
-the old `demo/` sources and preview constraints, then add `game/zombie_stub.v`
-and `ui/switch_toggle.v`, or regenerate the project as described above.
+the old `demo/` sources and preview/aim constraints, then add the `enemy/`
+design sources and `ui/switch_toggle.v`, or regenerate the project as described above.
 
 Use the default top `My_Top_Module` and `Basys3_Master.xdc`; no alternate pin file
 is needed. Regenerate the project or add all new design sources recursively to
@@ -101,15 +122,25 @@ owns the only OLED driver and the final-pixel bridge.
 | Left-click or btnC during play | Fire the pistol |
 | Right-click during play | Reload |
 | SW0 | Toggle the full map overlay; player marker follows movement |
-| SW13 / SW14, each flip | Test damage / defeat one stub zombie |
+| SW13 / SW14, each flip | Test damage / defeat the lowest active zombie slot |
 | SW15 up, then down | Reset to title |
 | Seven-segment display | Active map seed |
 
 The 2-player option stays disabled. Menus, generating screen, hearts, ten waves,
 weapon animation/ammo/reload, damage effects, victory/game-over screens and
-return-to-title behavior are integrated into the game. Firing emits the existing
-`shot_fired` event; it does not yet target enemies. Zombies are still map dots,
-without first-person sprites, navigation or attacks.
+return-to-title behavior are integrated into the game. Accepted shots trace from
+the actual player pose at the camera angle. The first zombie before a wall takes
+one damage, and three hits kill it. Adjacent zombies share a one-second player
+damage cooldown. Enemies move at up to two tile steps per second, rotating slot
+priority while following the live player's shared BFS field.
+
+SW0 hides/shows the map over the first-person scene. The sprite and wall
+renderers snapshot the same pose, prepare the back bank, and publish together.
+Sprite depth and wall depth use perpendicular camera distance. Horizontal sprite
+projection uses a pinhole approximation to the renderer's evenly spaced angle
+columns, so placement near the edges may differ by a small number of pixels.
+The two-player enemy interface remains opt-in and still needs the team's
+per-player health/weapon and UART integration.
 
 The generated map and UI use `{y,x}`, x right and y down, 1 wall / 0 floor.
 The integration reverses rows for the existing north-increasing renderer/player
@@ -148,7 +179,8 @@ Design folders are under `FDP2026.srcs/sources_1/new/`:
 | Folder | Responsibility |
 |---|---|
 | `map/` | Map system, generator, register storage, validator and LFSR |
-| `game/` | Game core, session flow, player health, waves, spawn selection and temporary enemy stub |
+| `game/` | Game core, session flow, player health, waves and spawn selection |
+| `enemy/` | Shared navigation, host enemy records, camera combat and sprite rendering |
 | `ui/` | Pixel compositor, menus, HUD, weapon controller/sprite, overlays and display helpers |
 
 The course `Oled_Display.v` and `Ps2Interface.vhd` and the relative-motion
@@ -187,3 +219,8 @@ stream checks. Add `-Hardware` to the renderer runner for synthesis, placement,
 routing, utilization, timing and CDC reports under `build/renderer_hardware/`.
 No board verification is implied by these simulations. See DeveloperGuide.md
 for the current integration results and remaining hardware checks.
+
+Run `./sim/enemy/run.ps1` for enemy lifecycle, combat, two-player host logic,
+wave/reset and legacy sprite regression checks. Its cardinal wall helper lives
+under `sim/enemy/` solely as a test fixture. The integrated board uses the
+shared `Map_Renderer` and `Ray_Caster`.

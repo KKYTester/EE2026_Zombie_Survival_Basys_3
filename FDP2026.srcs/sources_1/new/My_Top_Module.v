@@ -1,13 +1,14 @@
 `timescale 1ns / 1ps
 // Integrated single-player game: game_core owns flow, UI and OLED output.
-// The temporary enemies/test switches are retained until combat integration.
+// Enemy AI, combat and sprites share the map and camera with the raycaster.
 module My_Top_Module #(
     parameter DEBOUNCE_CYCLES=1000000,
     parameter GEN_SHIFT=26, parameter OVER_SHIFT=27,
     parameter TINT_SHIFT=25, parameter BLINK_SHIFT=24,
     parameter SPAWN_SHIFT=26, parameter CLEAR_SHIFT=27,
     parameter FLASH_SHIFT=22, parameter RECOIL_SHIFT=23, parameter RELOAD_SHIFT=25,
-    parameter WIN_WAVE=10
+    parameter WIN_WAVE=10,
+    parameter integer MOVE_PERIOD=50_000_000
 )(
     input wire clk,
     input wire btnC, btnU, btnL, btnR, btnD,
@@ -41,6 +42,12 @@ module My_Top_Module #(
     wire [7:0] p1_addr, p2_addr, spawn_tile;
     wire map_ready, map_busy, play_start, frame_begin, frame_idle;
     wire spawn_req, spawn_ack, enemy_defeated, enemies_clear, shot_fired;
+    wire spawn_busy, zombie_hit;
+    reg enemy_playing, enemy_clear;
+    always @(posedge clk) begin
+        if(reset) begin enemy_playing<=0; enemy_clear<=1; end
+        else begin enemy_playing<=playing; enemy_clear<=enemies_clear; end
+    end
     wire test_kill, test_hit;
     switch_toggle #(.STABLE_CYCLES(DEBOUNCE_CYCLES)) kill_switch(
         .clk(clk),.rst(reset),.switch_in(sw14),.flipped(test_kill));
@@ -73,6 +80,11 @@ module My_Top_Module #(
     wire [5:0] pixel_y;
     // game_core supplies look-ahead coordinates, including the tail pixel.
     wire [15:0] world_pixel;
+    wire [15:0] wall_pixel;
+    wire [9:0] column_depth;
+    wire scene_start, display_bank, scene_valid, sprites_ready;
+    wire [7:0] render_active;
+    wire [95:0] render_x, render_y;
     // Give the player one clock to load a newly published spawn before scan 0.
     reg map_valid_delayed=0;
     always @(posedge clk) map_valid_delayed <= !reset && map_ready && !map_busy;
@@ -80,12 +92,24 @@ module My_Top_Module #(
     // A scan takes at most 96*(768+8) = 74496 board clocks (<0.75 ms).
     // Completed banks swap only during the display's idle window. The bank
     // and map/player snapshot stay immutable throughout transmission.
-    Map_Renderer #(.USE_RUNTIME_MAP(1),.USE_PIXEL_COORDS(1)) u_Map_Renderer (
-        .clk(clk),.reset(reset || !map_ready || map_busy || !map_valid_delayed),.map_bits(world_map),
+    wire renderer_reset = reset || !map_ready || map_busy || !map_valid_delayed;
+    Map_Renderer #(.USE_RUNTIME_MAP(1),.USE_PIXEL_COORDS(1),.USE_ENEMY_OVERLAY(1)) u_Map_Renderer (
+        .clk(clk),.reset(renderer_reset),.map_bits(world_map),
         .x_coord(player_x),.y_coord(player_y),.theta(player_angle),.game_tick(game_tick),
         .display_clk(clk),.frame_begin(frame_idle),.pixel_index(13'd0),.pixel_x(pixel_x),.pixel_y(pixel_y),
-        .pixel_data(world_pixel),.column_depth()
+        .pixel_data(wall_pixel),.column_depth(column_depth),
+        .overlay_ready(sprites_ready),.scene_start(scene_start),
+        .display_bank(display_bank),.scene_valid(scene_valid)
     );
+    // Q12 north-up player coordinates become Q8 south-down enemy coordinates.
+    wire [11:0] camera_south = 12'd0-player_y[15:4];
+    zombie_renderer #(.USE_CAMERA_POSE(1),.FOCAL_X(83),.FOCAL_Y(64)) sprites(
+        .clk(clk),.reset(renderer_reset),.prepare(scene_start),
+        .display_bank(display_bank),.scene_valid(scene_valid),
+        .camera_x(player_x[15:4]),.camera_y(camera_south),.camera_angle(player_angle[9:0]),
+        .facing(2'd0),.active(render_active),.zombie_x(render_x),.zombie_y(render_y),
+        .pixel_x(pixel_x),.pixel_y(pixel_y),.wall_depth({column_depth,3'b0}),
+        .background(wall_pixel),.done(sprites_ready),.pixel(world_pixel));
     game_core #(.DEBOUNCE_CYCLES(DEBOUNCE_CYCLES),.GEN_SHIFT(GEN_SHIFT),.OVER_SHIFT(OVER_SHIFT),
         .TINT_SHIFT(TINT_SHIFT),.BLINK_SHIFT(BLINK_SHIFT),
         .SPAWN_SHIFT(SPAWN_SHIFT),.CLEAR_SHIFT(CLEAR_SHIFT),
@@ -104,10 +128,27 @@ module My_Top_Module #(
         .world_pixel(world_pixel),
         .pixel_x(pixel_x),.pixel_y(pixel_y),.frame_begin(frame_begin),.frame_idle(frame_idle),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.occupied(occupied),
-        .player_hit(test_hit),.spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_busy(),
+        .player_hit(zombie_hit || test_hit),.spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_busy(spawn_busy),
         .enemies_clear(enemies_clear),.shot_fired(shot_fired)
     );
-    zombie_stub enemies(.clk(clk),.rst(reset),.clear(enemies_clear),
-        .spawn_req(spawn_req),.spawn_tile(spawn_tile),.defeat(test_kill && playing),
-        .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.occupied(occupied));
+    localparam integer MOVE_BITS = MOVE_PERIOD>1 ? $clog2(MOVE_PERIOD) : 1;
+    reg [MOVE_BITS-1:0] move_counter;
+    wire move_tick = enemy_playing && move_counter==MOVE_PERIOD-1;
+    always @(posedge clk) begin
+        if(reset || enemy_clear || move_tick) move_counter<=0;
+        else move_counter<=move_counter+1'b1;
+    end
+    enemy_manager #(.USE_CAMERA_RAY(1)) enemies(
+        .clk(clk),.rst(reset),.clear(enemy_clear),.playing(enemy_playing),
+        .map_ready(map_ready && !map_busy),.map_bits(published_map),
+        .spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_ack(spawn_ack),
+        .spawn_busy(spawn_busy),.enemy_defeated(enemy_defeated),.occupied(occupied),
+        .debug_defeat(test_kill),.move_tick(move_tick),.player_tile(player_tile),
+        .shot_fired(shot_fired),.aim(2'd0),.camera_x(player_x),.camera_y(player_y),
+        .camera_angle(player_angle[9:0]),.shot_hit(),.player_hit(zombie_hit),
+        .player_active(1'b1),.player2_active(1'b0),.player2_tile(8'd0),
+        .shot_fired_p2(1'b0),.aim_p2(2'd0),.shot_ready(),.shot_ready_p2(),
+        .shot_hit_player(),.player_hit_p2(),.active(render_active),
+        .render_x(render_x),.render_y(render_y),.read_id(3'd0),
+        .read_active(),.read_x(),.read_y(),.read_hp(),.read_type(),.read_state(),.read_cooldown());
 endmodule
