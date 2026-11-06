@@ -22,7 +22,7 @@ module tb_enemy_waves;
         .wave(wave),.spawn_req(req),.spawn_tile(tile),.spawn_busy(spawn_busy),
         .alive(alive),.remaining(remaining),
         .wave_clear(clear_wave),.game_won(won));
-    enemy_manager enemies(.clk(clk),.rst(rst),.clear(start || !playing),
+    enemy_manager #(.MOVE_SUBSTEPS(1)) enemies(.clk(clk),.rst(rst),.clear(start || !playing),
         .playing(playing),.map_ready(1'b1),.map_bits(map_bits),.spawn_req(req),
         .spawn_tile(tile),.debug_defeat(defeat),.spawn_ack(ack),.enemy_defeated(dead),
         .move_tick(1'b1),.spawn_busy(spawn_busy),.player_tile(player_tile),

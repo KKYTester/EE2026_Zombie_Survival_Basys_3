@@ -1,5 +1,6 @@
 `timescale 1ns / 1ps
-// Reverse BFS on a stable 16x16 map. Tile IDs pack {y, x}.
+// Eight-neighbor reverse BFS on a stable 16x16 map. Tile IDs pack {y, x}.
+// Equal hop costs; diagonal side walls are closed. <=4357 clocks per rebuild.
 module flow_field(
     input wire clk, reset, enabled,
     input wire [255:0] walls,
@@ -8,20 +9,21 @@ module flow_field(
     input wire [7:0] goal2,
     output wire ready,
     output reg read_reachable,
-    output reg [1:0] read_direction
+    output reg [2:0] read_direction
 );
     localparam [2:0] START=0, POP=1, NEIGHBOR=2, VISIT=3, DONE=4, SEED_SECOND=5;
     reg [2:0] state;
     reg [7:0] field_goal, current, neighbor;
     reg [7:0] field_goal2;
     reg field_active, field_active2;
-    reg neighbor_valid;
-    reg [1:0] direction;
+    reg neighbor_allowed;
+    reg [2:0] direction;
+    `include "Enemy_Path.vh"
     // Nine-bit indices distinguish an empty queue from 256 queued entries.
     reg [8:0] head, tail;
     reg [255:0] visited;
     reg [7:0] queue [0:255];
-    reg [1:0] arrows [0:255];
+    reg [2:0] arrows [0:255];
 
     wire same_goals = field_active==goal_active && field_active2==goal2_active &&
                       (!goal_active || field_goal==goal) &&
@@ -31,14 +33,18 @@ module flow_field(
     wire seed = building && state==START && goal_active && !walls[goal];
     wire seed2 = building && state==SEED_SECOND && goal2_active &&
                  !walls[goal2] && !visited[goal2];
-    wire discover = building && state==VISIT && neighbor_valid &&
+    wire [7:0] next_neighbor=neighbor_tile(current,direction);
+    wire neighbor_valid_step=neighbor_valid(current,direction) &&
+        (!direction[2] || (!walls[{current[7:4],next_neighbor[3:0]}] &&
+                           !walls[{next_neighbor[7:4],current[3:0]}]));
+    wire discover = building && state==VISIT && neighbor_allowed &&
                     !walls[neighbor] && !visited[neighbor];
 
     // No memory reset needed. Visited bits qualify every stored arrow.
     always @(posedge clk) begin
         if(seed) queue[0]<=goal;
         else if(seed2 || discover) queue[tail[7:0]]<=seed2 ? goal2 : neighbor;
-        if(discover) arrows[neighbor]<=direction ^ 2'b01;
+        if(discover) arrows[neighbor]<=direction ^ 3'b001;
         if(building && state==POP && head!=tail) current<=queue[head[7:0]];
         read_direction<=arrows[read_tile];
         read_reachable<=ready && visited[read_tile] &&
@@ -72,13 +78,8 @@ module flow_field(
                     head<=head+1'b1; direction<=0; state<=NEIGHBOR;
                 end
                 NEIGHBOR: begin
-                    // Direction order: left, right, up, down.
-                    case(direction)
-                        2'd0: begin neighbor<=current-8'd1; neighbor_valid<=current[3:0]!=0; end
-                        2'd1: begin neighbor<=current+8'd1; neighbor_valid<=current[3:0]!=15; end
-                        2'd2: begin neighbor<=current-8'd16; neighbor_valid<=current[7:4]!=0; end
-                        2'd3: begin neighbor<=current+8'd16; neighbor_valid<=current[7:4]!=15; end
-                    endcase
+                    neighbor<=neighbor_tile(current,direction);
+                    neighbor_allowed<=neighbor_valid_step;
                     state<=VISIT;
                 end
                 VISIT: begin
@@ -88,7 +89,7 @@ module flow_field(
                         tail<=tail+1'b1;
                     end
                     direction<=direction+1'b1;
-                    state<=(direction==3) ? POP : NEIGHBOR;
+                    state<=(direction==7) ? POP : NEIGHBOR;
                 end
                 DONE: state<=DONE;
                 default: state<=START;

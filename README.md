@@ -137,8 +137,47 @@ weapon animation/ammo/reload, damage effects, victory/game-over screens and
 return-to-title behavior are integrated into the game. Accepted shots trace from
 the actual player pose at the camera angle. The first zombie before a wall takes
 one damage, and three hits kill it. Adjacent zombies share a one-second player
-damage cooldown. Enemies move at up to two tile steps per second, rotating slot
-priority while following the live player's shared BFS field.
+damage cooldown. Enemies use 32 fractional updates per second, moving at one
+tile per second on straight cardinal segments and rotating slot priority while
+following the live player's shared BFS
+field. BFS searches all eight neighbors with equal hop cost. Diagonals require
+the destination and both side tiles to be floor, with no wrapping at map edges.
+The 256-entry queue visits each tile once; a full rebuild takes at most 4,357
+100 MHz clocks (about 44 microseconds), including two-player seeding. Fractional movement steers toward a point 0.25 tile ahead along the
+planned center-to-center path (`enemy_manager.LOOKAHEAD`, in coordinate units).
+Both direction components blend near turns; a blocked lookahead segment or a
+turn sharper than 90 degrees falls back to the current waypoint. Diagonal
+lookahead distances use 181/256 and 362/256 approximations to 1/sqrt(2) and
+sqrt(2), so straight diagonal travel has approximately the same speed as
+cardinal travel. Its next tile is reserved before steering begins,
+and every proposed substep must remain on the current segment's floor tiles.
+Steering arithmetic is pipelined; an eight-slot sweep takes fewer than 200
+board clocks. A blended waypoint completes within one substep of its endpoint
+plane, retaining lateral motion. The proportional steering can slow movement
+at corners; Q8 substep rounding also slightly reduces diagonal speed. Sprites and minimap
+dots use the fractional positions. A trip reserves both endpoints until arrival;
+a diagonal also reserves both side tiles, covering its entire 2x2 swept square.
+The lookahead segment uses the same reservation footprint. These conservative
+reservations prevent swaps and crossing diagonals, and may make nearby zombies
+wait. The reservation union is registered and updated atomically with each owner's
+trip; arrival, death and reset release the owned reservations. Shots intersect circles at the actual fractional
+positions, using `enemy_manager.HIT_RADIUS` (in coordinate fixed-point units),
+which defaults to 0.25 tile. The first circle intersection takes damage; walls
+block hits using a bounded grid DDA, including zero-component rays. The shared
+solver checks one slot at a time with a 28-cycle integer square root, then visits
+at most 31 tile boundaries. Movement and spawning stay locked until damage
+commits, keeping the shot snapshot consistent. Cardinal test-mode shots use the
+same circles.
+The spawn selector excludes those reservations. Contact damage uses the
+existing Manhattan distance (|dx| + |dy|) between actual player/enemy positions;
+enemies stop when within one tile of the player.
+Fractional contact checks include diagonal neighbors and reject side-wall
+corners, so a zombie already in range can attack after a diagonal approach.
+
+`My_Top_Module.MOVE_PERIOD` is the interval between substeps at 100 MHz.
+The default 3,125,000 clocks gives 32 updates per second with
+`enemy_manager.MOVE_SUBSTEPS=32`. One-step mode remains available for the
+earlier tile-movement regression tests.
 
 SW0 hides/shows the map over the first-person scene. The sprite and wall
 renderers snapshot the same pose, prepare the back bank, and publish together.
@@ -225,6 +264,34 @@ No board verification is implied by these simulations. See DeveloperGuide.md
 for the current integration results and remaining hardware checks.
 
 Run `./sim/enemy/run.ps1` for enemy lifecycle, combat, two-player host logic,
-wave/reset and legacy sprite regression checks. Its cardinal wall helper lives
-under `sim/enemy/` solely as a test fixture. The integrated board uses the
+wave/reset and legacy sprite regression checks, plus circle tangencies and
+misses, lookahead turns, diagonal BFS against an independent shortest-hop
+reference, blocked corners, diagonal speed, swept-square reservations, swaps,
+crossing-path waits, cached ownership, high-precision coordinates and diagonal
+contact/wall blocking. Select a subset with, for example,
+`./sim/enemy/run.ps1 -Tests tb_flow_diagonal,tb_enemy_diagonal`. Its cardinal
+wall helper lives under `sim/enemy/` solely as a test fixture. The integrated board uses the
 shared `Map_Renderer` and `Ray_Caster`.
+
+
+### Enemy-change validation (6 November 2026)
+
+All 12 enemy XSim testbenches pass, including circular shooting, lookahead,
+diagonal shortest-hop routes, reservation ownership, swaps/crossings, diagonal
+contact and Q24 arithmetic. The raycaster (1,800 reference rays), player
+controller (16,384 movement references), runtime-map and integrated zombie/wall
+renderer checks also pass.
+
+Vivado 2025.2 synthesis, placement and routing of `My_Top_Module` for
+`xc7a35tcpg236-1` complete with setup slack **+0.062 ns** and hold slack
+**+0.040 ns**, zero failing paths and no unconstrained internal endpoints.
+Routed utilization is **15,770 LUTs (75.82%)**, 10,296 registers (24.75%),
+20 DSPs and two RAMB18s. Reports and the routed checkpoint are generated under
+`build/renderer_hardware/` and are not committed.
+
+DRC has no errors; 34 DSP pipelining advisories remain. CDC reports all
+sys-clock/OLED crossings as safely timed, with 12 unknown endpoints on existing
+asynchronous external inputs requiring board/peripheral review. No bitstream
+was generated and no board test was performed; mouse, OLED and gameplay checks
+on the physical Basys 3 remain outstanding. The routed timing margin is small,
+so repeat implementation checks after further RTL or constraint changes.

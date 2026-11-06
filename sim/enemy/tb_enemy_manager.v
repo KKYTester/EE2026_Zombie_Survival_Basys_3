@@ -25,7 +25,7 @@ module tb_enemy_manager;
         if(dead) deaths=deaths+1;
         if(player_hit) player_hits=player_hits+1;
     end
-    enemy_manager #(.ATTACK_COOLDOWN_CYCLES(16)) dut(
+    enemy_manager #(.MOVE_SUBSTEPS(1),.ATTACK_COOLDOWN_CYCLES(16)) dut(
         .clk(clk),.rst(rst),.clear(clear),.playing(playing),
         .map_ready(ready),.map_bits(map_bits),.spawn_req(req),.spawn_tile(tile),
         .debug_defeat(defeat),.spawn_ack(ack),.enemy_defeated(dead),
@@ -49,7 +49,7 @@ module tb_enemy_manager;
         begin
             aim=direction; shot_fired=1; step; shot_fired=0;
             aim=~direction; // Changes after the trigger must not turn the shot.
-            repeat(52) step;
+            repeat(500) step;
         end
     endtask
     task spawn(input [7:0] where);
@@ -133,7 +133,7 @@ module tb_enemy_manager;
         check(occupied[8'h32] && occupied[8'h33],"stale field used after goal change");
         while(!dut.field_ready) step;
         sweep;
-        check(occupied[8'h22] && occupied[8'h23],"new goal did not redirect movement");
+        check(occupied[8'h22] && occupied[8'h33],"diagonal route did not wait for its occupied destination");
 
         // Repeat the same contest with the slot that lost now going first.
         clear=1; step; clear=0;
@@ -198,7 +198,7 @@ module tb_enemy_manager;
         spawn(8'h51);
         while(!dut.field_ready) step;
         aim=2'd1; shot_fired=1; move_tick=1; step;
-        shot_fired=0; move_tick=0; repeat(52) step;
+        shot_fired=0; move_tick=0; repeat(500) step;
         id=0; #1;
         check(hp==2 && occupied[8'h51],"movement conflicted with a shot");
 
@@ -227,5 +227,5 @@ module tb_enemy_manager;
         check(player_hits==i+2,"attack outside gameplay");
         $display("TB_ENEMY_MANAGER: PASS"); $finish;
     end
-    initial begin #200000; $fatal(1,"timeout"); end
+    initial begin #500000; $fatal(1,"timeout"); end
 endmodule

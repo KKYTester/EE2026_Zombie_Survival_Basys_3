@@ -5,7 +5,7 @@
 // The caller supplies coherent frame snapshots; no clocks or state live here.
 // Use the same module for ordinary pixels and the tail-bridge pixel (95,63).
 module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
-                          parameter SHOW_CURSOR=1)(
+                          parameter SHOW_CURSOR=1, parameter FRACTIONAL_ENEMIES=0)(
     input wire [6:0] px, input wire [5:0] py,
     input wire [15:0] world_pixel,
     input wire [2:0] game_state, input wire minimap_mode,
@@ -20,6 +20,8 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
     input wire [1:0] health, input wire low_blink,
     input wire [6:0] wave, input wire [6:0] remaining,
     input wire [255:0] zombie_tiles, input wire tint,
+    input wire [7:0] zombie_active,
+    input wire [95:0] zombie_x, zombie_y,
     // Weapon animation and ammunition.
     input wire weapon_recoil, input wire weapon_flash, input wire weapon_reloading,
     input wire [2:0] ammo, input wire [4:0] weapon_drop,
@@ -55,7 +57,9 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
         .show_p2(show_partner),
         .busy(map_busy),.bfs_enabled(STAGE==3),.error_code(error_code),
         .pixel_data(map_pixel_data));
-    zombie_overlay zombie_dots(.px(px),.py(py),.minimap_mode(minimap_mode),.zombies(zombie_tiles),
+    zombie_overlay #(.USE_FRACTIONAL_POSITIONS(FRACTIONAL_ENEMIES)) zombie_dots(
+        .px(px),.py(py),.minimap_mode(minimap_mode),.zombies(zombie_tiles),
+        .active(zombie_active),.position_x(zombie_x),.position_y(zombie_y),
         .pixel_in(map_pixel_data),.pixel_out(zombie_pixel_data));
     play_effects effects(.pixel_in(zombie_pixel_data),.tint(tint),
         .pixel_out(play_pixel_data));

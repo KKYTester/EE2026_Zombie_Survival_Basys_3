@@ -4,6 +4,17 @@ Owner: Fawaz. Recorded: 2026-11-03. Status: proposed for team review.
 
 ## Main integration update (2026-11-06)
 
+Smooth movement adds `spawn_occupied`, which combines actual occupancy with
+segment reservations. Feed it to `game_core` with `USE_SPAWN_OCCUPANCY=1`.
+Continue using `occupied` for shooting. The packed render positions advance
+in 32 Q8 substeps per tile. A live trip reserves its origin and destination
+until it finishes or the zombie is removed. Reset clears all reservations.
+
+`USE_PLAYER_POSITIONS=1` enables the supplied south-increasing Q8 player
+positions for contact distance. The host supplies both players' positions
+when using the two-player configuration. The integrated single-player top
+converts its live Q12 pose at this boundary.
+
 The integration branch is based on main `83d2f9a`. The current shared player
 uses Q12 positions, north-increasing Y and 1024 clockwise angle units per turn.
 The host converts its live tile to the map's south-increasing Y for navigation.

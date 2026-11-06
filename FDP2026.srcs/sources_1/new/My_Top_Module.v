@@ -20,7 +20,7 @@ module My_Top_Module #(
     parameter SPAWN_SHIFT=26, parameter CLEAR_SHIFT=27,
     parameter FLASH_SHIFT=22, parameter RECOIL_SHIFT=23, parameter RELOAD_SHIFT=25,
     parameter WIN_WAVE=10,
-    parameter integer MOVE_PERIOD=50_000_000,
+    parameter integer MOVE_PERIOD=3_125_000,      // 32 fractional zombie updates per second
     parameter integer CLK_FREQ=100_000_000,
     parameter integer LINK_PERIOD=2_000_000,      // status every 20 ms
     parameter integer LINK_TIMEOUT=50_000_000     // link lost after 500 ms of silence
@@ -60,7 +60,7 @@ module My_Top_Module #(
     button_debounce #(.STABLE_CYCLES(DEBOUNCE_CYCLES)) title_toggle(
         .clk(clk),.rst(reset),.button(btnD),.pressed(press_d));
 
-    wire [255:0] published_map, occupied;
+    wire [255:0] published_map, occupied, spawn_occupied;
     wire [7:0] p1_addr, p2_addr, spawn_tile;
     wire [15:0] active_seed;
     wire [6:0] wave;
@@ -182,7 +182,7 @@ module My_Top_Module #(
         .TINT_SHIFT(TINT_SHIFT),.BLINK_SHIFT(BLINK_SHIFT),
         .SPAWN_SHIFT(SPAWN_SHIFT),.CLEAR_SHIFT(CLEAR_SHIFT),
         .FLASH_SHIFT(FLASH_SHIFT),.RECOIL_SHIFT(RECOIL_SHIFT),.RELOAD_SHIFT(RELOAD_SHIFT),
-        .WIN_WAVE(WIN_WAVE)) game (
+        .WIN_WAVE(WIN_WAVE),.USE_SPAWN_OCCUPANCY(1),.FRACTIONAL_ENEMIES(1)) game (
         .clk(clk),.rst(reset),.btn_c(btnC),.btn_d(press_d),.sw_map(sw0),
         .oled_jb(JB),.seg(),.dp(),.an(),.led(game_led),
         .mouse_x(mouse_x),.mouse_y(mouse_y),.mouse_left(mouse_left),
@@ -202,6 +202,8 @@ module My_Top_Module #(
         .world_pixel(world_pixel),
         .pixel_x(pixel_x),.pixel_y(pixel_y),.frame_begin(frame_begin),.frame_idle(frame_idle),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.occupied(occupied),
+        .spawn_occupied(spawn_occupied),
+        .zombie_active(render_active),.zombie_x(render_x),.zombie_y(render_y),
         .player_hit(zombie_hit || test_hit),.spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_busy(spawn_busy),
         .enemies_clear(enemies_clear),.shot_fired(shot_fired)
     );
@@ -214,19 +216,21 @@ module My_Top_Module #(
         if(reset || enemy_clear || move_tick) move_counter<=0;
         else move_counter<=move_counter+1'b1;
     end
-    enemy_manager #(.USE_CAMERA_RAY(1)) enemies(
+    enemy_manager #(.USE_CAMERA_RAY(1),.USE_PLAYER_POSITIONS(1)) enemies(
         .clk(clk),.rst(reset),.clear(enemy_clear),.playing(enemy_playing),
         .map_ready(map_ready && !map_busy),.map_bits(published_map),
         .spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_ack(spawn_ack),
         .spawn_busy(spawn_busy),.enemy_defeated(enemy_defeated),.occupied(occupied),
         .debug_defeat(test_kill),.move_tick(move_tick),.player_tile(player_tile),
+        .player_pos_x({20'd0,player_x[15:4]}),.player_pos_y({20'd0,camera_south}),
+        .player2_pos_x(32'd0),.player2_pos_y(32'd0),
         .shot_fired(shot_fired),.aim(2'd0),.camera_x(player_x),.camera_y(player_y),
         .camera_angle(player_angle[9:0]),
         .shot_hit(),.player_hit(zombie_hit),
         .player_active(1'b1),.player2_active(1'b0),.player2_tile(8'd0),
         .shot_fired_p2(1'b0),.aim_p2(2'd0),.shot_ready(),.shot_ready_p2(),
         .shot_hit_player(),.player_hit_p2(),.active(render_active),
-        .render_x(render_x),.render_y(render_y),.read_id(3'd0),
+        .render_x(render_x),.render_y(render_y),.spawn_occupied(spawn_occupied),.read_id(3'd0),
         .read_active(),.read_x(),.read_y(),.read_hp(),.read_type(),.read_state(),.read_cooldown());
 
     // ---------------- Board displays ----------------
