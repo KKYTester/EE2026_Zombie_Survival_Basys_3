@@ -4,6 +4,7 @@ module enemy_manager #(
     parameter integer MAX_ENEMIES = 8,
     parameter integer COORD_FRAC_BITS = 8, // supported range: 1..27
     parameter integer MOVE_SUBSTEPS = (COORD_FRAC_BITS>=5) ? 32 : (1<<COORD_FRAC_BITS),
+    parameter integer HIT_RADIUS = (1<<COORD_FRAC_BITS)/4,
     parameter [7:0] INITIAL_HP = 8'd3,
     parameter integer ATTACK_COOLDOWN_CYCLES = 100_000_000,
     parameter TWO_PLAYERS = 0,
@@ -123,10 +124,12 @@ module enemy_manager #(
         assign shots_waiting = shot_fired;
     end endgenerate
 
-    enemy_combat #(.USE_CAMERA_RAY(USE_CAMERA_RAY)) combat(
+    enemy_combat #(.USE_CAMERA_RAY(USE_CAMERA_RAY), .MAX_ENEMIES(MAX_ENEMIES),
+        .COORD_FRAC_BITS(COORD_FRAC_BITS), .HIT_RADIUS(HIT_RADIUS)) combat(
         .clk(clk),.reset(rst || clear),.enabled(playing && map_ready),
         .camera_x(camera_x),.camera_y(camera_y),.camera_angle(camera_angle),
         .shot_fired(fire_ray),.player_tile(ray_origin),.aim(ray_aim),.walls(map_bits),
+        .active(active),.position_x(render_x),.position_y(render_y),
         .occupied(occupied),.busy(ray_busy),.hit_valid(hit_valid),.hit_tile(hit_tile));
     // Resolve the tile to a slot before applying damage on the next clock.
     always @* begin

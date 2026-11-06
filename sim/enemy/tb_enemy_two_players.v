@@ -62,7 +62,7 @@ module tb_enemy_two_players;
         spawn(8'h23);
         if(!ready1 || !ready2) $fatal(1,"shot inputs not ready");
         fire1=1; fire2=1; @(negedge clk); fire1=0; fire2=0;
-        repeat(60) @(negedge clk);
+        repeat(1000) @(negedge clk);
         if(hits!=2 || hit_order!=2'b01 || deaths!=1 || occupied!=0 || active!=0)
             $fatal(1,"concurrent shots did not produce two ordered hits and one kill");
 

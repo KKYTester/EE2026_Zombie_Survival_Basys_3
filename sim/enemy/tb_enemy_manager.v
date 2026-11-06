@@ -49,7 +49,7 @@ module tb_enemy_manager;
         begin
             aim=direction; shot_fired=1; step; shot_fired=0;
             aim=~direction; // Changes after the trigger must not turn the shot.
-            repeat(52) step;
+            repeat(500) step;
         end
     endtask
     task spawn(input [7:0] where);
@@ -198,7 +198,7 @@ module tb_enemy_manager;
         spawn(8'h51);
         while(!dut.field_ready) step;
         aim=2'd1; shot_fired=1; move_tick=1; step;
-        shot_fired=0; move_tick=0; repeat(52) step;
+        shot_fired=0; move_tick=0; repeat(500) step;
         id=0; #1;
         check(hp==2 && occupied[8'h51],"movement conflicted with a shot");
 

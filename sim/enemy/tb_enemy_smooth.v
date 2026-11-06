@@ -54,7 +54,7 @@ module tb_enemy_smooth;
         end
     endtask
     task shoot;
-        begin fire=1; step; fire=0; repeat(52) step; end
+        begin fire=1; step; fire=0; repeat(500) step; end
     endtask
     task direction_trip(input [7:0] goal, input [31:0] target_x, target_y,
                         input [11:0] expected_x, expected_y);

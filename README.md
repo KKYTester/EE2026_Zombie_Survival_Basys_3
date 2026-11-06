@@ -134,7 +134,14 @@ one damage, and three hits kill it. Adjacent zombies share a one-second player
 damage cooldown. Enemies move at up to one tile per second in 32 fractional
 updates, rotating slot priority while following the live player's shared BFS
 field. Sprites and minimap dots use the fractional positions. A trip reserves
-both endpoint tiles until arrival; the shooting mask tracks the actual tile.
+both endpoint tiles until arrival. Shots intersect circles at the actual fractional
+positions, using `enemy_manager.HIT_RADIUS` (in coordinate fixed-point units),
+which defaults to 0.25 tile. The first circle intersection takes damage; walls
+block hits using a bounded grid DDA, including zero-component rays. The shared
+solver checks one slot at a time with a 28-cycle integer square root, then visits
+at most 31 tile boundaries. Movement and spawning stay locked until damage
+commits, keeping the shot snapshot consistent. Cardinal test-mode shots use the
+same circles.
 The spawn selector excludes those reservations. Contact damage uses actual
 player/enemy distance, and enemies stop when within one tile of the player.
 
