@@ -10,7 +10,9 @@
 //     position and visibility cross the link.
 //  5. B's shot reaches A's combat; zombie damage to B is tracked by A and
 //     shown on B.
-//  6. A goes down: the run continues for B. B goes down: both boards end.
+//  6. B goes down first: the run continues for A. The downed B cannot
+//     restart: BTN-C does nothing, and resetting B makes it rejoin the same
+//     run still with no hearts. Then A goes down: both boards end.
 module tb_two_board_game;
     reg clk=0;
     always #5 clk=~clk;
@@ -126,13 +128,28 @@ module tb_two_board_game;
         if(B.health!==A.partner_hearts) fail("follower's hearts differ from the leader's count");
         $display("P2 shots seen by leader: %0d, B hearts %0d", b_shots, B.health);
 
-        // 6. A goes down: the run continues. Then B goes down: both end.
-        hit_a(3);
-        repeat(30000) @(posedge clk);
-        if(A.health!==0) fail("A not down");
-        if(A.game_state!=3 || B.game_state!=3) fail("run ended while B was still alive");
+        // 6. B goes down first; it must not be able to come back.
         hit_b(3);
-        wait_both(3'd4, 100000);
+        repeat(30000) @(posedge clk);
+        if(B.health!==0 || A.partner_hearts!==0) fail("B not down");
+        if(A.game_state!=3 || B.game_state!=3) fail("run ended while A was still alive");
+        if(A.partner_in_game) fail("zombies still target the downed B");
+        // A downed player's BTN-C / click cannot restart anything.
+        press(2); press(2);
+        repeat(30000) @(posedge clk);
+        if(B.game_state!=3 || B.health!==0) fail("downed B changed state with BTN-C");
+        // Resetting the downed board: it rejoins the same run, still down.
+        b_reset=1; repeat(50) @(posedge clk); b_reset=0;
+        for(i=0;i<800000 && B.game_state!=3;i=i+1) @(posedge clk);
+        repeat(30000) @(posedge clk);
+        if(B.game_state!=3) fail("reset B did not rejoin the run");
+        if(B.game_token!==A.game_token) fail("reset B joined a different run");
+        if(B.health!==0) fail("reset B came back with hearts (respawn exploit)");
+        if(A.game_state!=3 || A.health==0) fail("A's run was disturbed by B's reset");
+        $display("downed B after reset: state %0d, hearts %0d, A hearts %0d", B.game_state, B.health, A.health);
+        // A goes down too: the run ends on both boards.
+        hit_a(3);
+        wait_both(3'd4, 200000);
         if(A.game_state!=4 || B.game_state!=4) fail("run did not end on both boards");
         else $display("both down: both boards show GAME OVER");
 
