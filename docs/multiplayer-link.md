@@ -12,7 +12,7 @@ checksum equal to the sum of type, length and payload.
 
 | Type | Length | Payload | Rate |
 |---|---:|---|---|
-| `30` STATUS | 9 | Sequence byte, 8 status bytes | Every 20 ms from each board |
+| `30` STATUS | 15 | Sequence byte, 14 status bytes | Every 20 ms from each board |
 
 `link_up` rises on the first valid STATUS packet and falls after 500 ms without
 one. All periods are clock-cycle parameters (100 MHz defaults).
@@ -29,6 +29,9 @@ one. All periods are clock-cycle parameters (100 MHz defaults).
 | `[44:29]` | Map seed (final once the leader is playing) |
 | `[51:45]` | Wave |
 | `[53:52]` | Hearts |
+| `[69:54]` | Position x (Q4.12 tiles, east) |
+| `[85:70]` | Position y (Q4.12 tiles, north) |
+| `[95:86]` | View angle (1024 per turn, 0 = north, clockwise) |
 
 ## Joining a game (`game_flow`)
 
@@ -43,6 +46,9 @@ one. All periods are clock-cycle parameters (100 MHz defaults).
 - After a run, a board returning to the title keeps its token, so it never
   re-joins the run its partner is still playing.
 
-Each board runs its own enemies, waves and hearts; nothing else is shared.
+Each board runs its own enemies, waves and hearts. While both boards play the
+same run, each draws the other player from its position: sprite slot 8 of
+`zombie_renderer` (`SLOTS=9`, `HAS_ALLY=1`, human colours) and a yellow tile on
+the SW0 map.
 The older host/client `multiplayer_link` module remains in the source tree
 with its own testbench but is not used by `My_Top_Module`.

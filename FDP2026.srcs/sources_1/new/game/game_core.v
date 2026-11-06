@@ -52,6 +52,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     input wire [7:0] peer_token, input wire [15:0] peer_priority,
     input wire [15:0] peer_seed,
     input wire [6:0] peer_wave, input wire peer_in_run,  // shown on end screens
+    input wire [7:0] partner_tile,                // other player's tile ({y,x}, y down)
+    input wire partner_visible,                   // draw it on the SW0 map
     output wire two_player, output wire leader,
     output wire [7:0] game_token, output wire [15:0] start_priority,
     // Player (Member 1)
@@ -233,7 +235,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     reg [2:0] frame_error;
     reg [2:0] frame_screen;
     reg frame_sel,frame_tint,frame_blink,frame_over_ready;
-    reg frame_link,frame_two_player,frame_peer_in_run;
+    reg frame_link,frame_two_player,frame_peer_in_run,frame_partner;
     reg [6:0] frame_peer_wave;
     reg [6:0] frame_cx; reg [5:0] frame_cy;
     reg [5:0] frame_progress;
@@ -251,9 +253,10 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
             frame_cx<=48; frame_cy<=40; frame_progress<=0;
             frame_tint<=0; frame_blink<=0; frame_over_ready<=0;
             frame_link<=0; frame_two_player<=0; frame_peer_in_run<=0; frame_peer_wave<=0;
+            frame_partner<=0;
         end else if(oled_frame_begin) begin
             frame_map<=published_map; frame_p1<=playing_now ? player_tile : p1_addr;
-            frame_p2<=p2_addr;
+            frame_p2<=partner_tile; frame_partner<=partner_visible && playing_now;
             frame_pos_x<=player_pos_x; frame_pos_y<=player_pos_y; frame_angle<=player_angle;
             frame_health<=health;
             frame_wave<=wave;
@@ -286,7 +289,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .menu_sel(frame_sel),.cursor_x(frame_cx),.cursor_y(frame_cy),
         .progress(frame_progress),.over_ready(frame_over_ready),
         .link_up(frame_link),.two_player(frame_two_player),
-        .peer_wave(frame_peer_wave),.peer_in_run(frame_peer_in_run),.pixel_out(pixel_data));
+        .peer_wave(frame_peer_wave),.peer_in_run(frame_peer_in_run),
+        .show_partner(frame_partner),.pixel_out(pixel_data));
 
     // The course OLED driver omits (95,63); the bridge sends this same composition.
     pixel_compositor #(.STAGE(STAGE),.ENABLE_2P(ENABLE_2P),.SHOW_CURSOR(SHOW_CURSOR)) last_pixel_compositor(
@@ -302,7 +306,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .menu_sel(frame_sel),.cursor_x(frame_cx),.cursor_y(frame_cy),
         .progress(frame_progress),.over_ready(frame_over_ready),
         .link_up(frame_link),.two_player(frame_two_player),
-        .peer_wave(frame_peer_wave),.peer_in_run(frame_peer_in_run),.pixel_out(last_pixel_data));
+        .peer_wave(frame_peer_wave),.peer_in_run(frame_peer_in_run),
+        .show_partner(frame_partner),.pixel_out(last_pixel_data));
 
     wire raw_cs,raw_sdin,raw_sclk,raw_dcn;
     Oled_Display oled(.clk(oled_clk),.reset(oled_reset),.frame_begin(oled_frame_begin),

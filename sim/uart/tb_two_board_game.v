@@ -91,6 +91,22 @@ module tb_two_board_game;
         $display("zombies A=%b B=%b, A seg=%h B seg=%h", A.render_active, B.render_active,
                  A.seg_value, B.seg_value);
 
+        // 3b. Each board sees the other player.
+        if(!(A.partner_visible && B.partner_visible)) fail("partner not visible");
+        if(A.partner_x!==B.player_x[15:0] || A.partner_y!==B.player_y[15:0])
+            fail("A has wrong partner position");
+        // Move B one tile north-east and check A's sprite inputs follow
+        // (sprite drawing itself is covered by sim/enemy/tb_ally_sprite.v).
+        force B.player_x = {16'd0, A.player_x[15:12]+4'd1, A.player_x[11:0]};
+        force B.player_y = {16'd0, A.player_y[15:12]+4'd1, A.player_y[11:0]};
+        repeat(60000) @(posedge clk);
+        if(A.partner_tile!==B.player_tile) fail("A partner tile does not follow B");
+        if(!A.sprite_active[8]) fail("partner sprite slot not active on A");
+        if(A.sprite_x[107:96]!==B.player_x[15:4] || A.sprite_y[107:96]!==(12'd0-B.player_y[15:4]))
+            fail("partner sprite coordinates wrong on A");
+        else $display("partner sprite: B at tile %h fed to A's renderer", B.player_tile);
+        release B.player_x; release B.player_y;
+
         // 4. A dies; B keeps playing.
         kill(0);
         wait_state(0, 3'd4, 20000);
@@ -98,6 +114,7 @@ module tb_two_board_game;
         if(B.game_state!=3) fail("B stopped when A died");
         repeat(20000) @(posedge clk);
         if(B.peer_in_run) fail("B still shows partner playing");
+        if(B.partner_visible) fail("B still shows the dead partner");
         if(!A.peer_in_run) fail("A does not show B still playing");
         repeat(1<<P_OVER) @(posedge clk);
         press(0);

@@ -30,6 +30,7 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
     // end screens of a 2-player run.
     input wire link_up, input wire two_player,
     input wire [6:0] peer_wave, input wire peer_in_run,
+    input wire show_partner,          // p2_addr = the other player's tile (yellow)
     output wire [15:0] pixel_out);
     wire playing = game_state==3'd3;
     // Menu screen numbers: 0 title, 1 generating, 2 reserved, 3 game over, 4 victory.
@@ -50,8 +51,8 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
         .fp_pixel_data(ammo_pixel_data),.map_bits(map_bits),.p1_addr(p1_addr),
         .p2_addr(p2_addr),.player_x(player_x),.player_y(player_y),.player_angle(player_angle),
         .seed(seed),.map_ready(map_ready),
-        // Each board plays its own world, so no second player is drawn.
-        .show_p2(1'b0),
+        // The other player's tile, while both boards play the same map.
+        .show_p2(show_partner),
         .busy(map_busy),.bfs_enabled(STAGE==3),.error_code(error_code),
         .pixel_data(map_pixel_data));
     zombie_overlay zombie_dots(.px(px),.py(py),.minimap_mode(minimap_mode),.zombies(zombie_tiles),

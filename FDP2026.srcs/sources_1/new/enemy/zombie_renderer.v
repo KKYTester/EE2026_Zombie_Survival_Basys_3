@@ -1,16 +1,20 @@
 `timescale 1ns / 1ps
-// Prepare eight billboards in the back bank, then composite pixels serially.
+// Prepare SLOTS billboards in the back bank, then composite pixels serially.
+// With HAS_ALLY=1 the last slot is drawn as a human (the other player) in
+// skin/blue colours instead of a zombie.
 module zombie_renderer #(
     parameter USE_CAMERA_POSE=0,
     parameter integer FOCAL_X=64,
-    parameter integer FOCAL_Y=64
+    parameter integer FOCAL_Y=64,
+    parameter integer SLOTS=8,             // 2..16 billboards
+    parameter HAS_ALLY=0
 )(
     input wire clk, reset, prepare, display_bank, scene_valid,
     input wire [11:0] camera_x, camera_y,
     input wire [1:0] facing,
     input wire [9:0] camera_angle,
-    input wire [7:0] active,
-    input wire [95:0] zombie_x, zombie_y, // Eight packed Q8 tile coordinates.
+    input wire [SLOTS-1:0] active,
+    input wire [12*SLOTS-1:0] zombie_x, zombie_y, // Packed Q8 tile coordinates, x right, y down.
     input wire [6:0] pixel_x,
     input wire [5:0] pixel_y,
     input wire [12:0] wall_depth,         // Forward Q8 depth; 4096 means no wall.
@@ -20,12 +24,15 @@ module zombie_renderer #(
 );
     localparam [2:0] P_IDLE=0, P_READ=1, P_ROTATE=2, P_SCALE=3,
                      P_PROJECT=4, P_STORE=5, P_DOT=6;
-    reg [2:0] project_state, slot;
+    localparam integer SB = (SLOTS>8) ? 4 : (SLOTS>4) ? 3 : (SLOTS>2) ? 2 : 1;
+    localparam integer ENTRIES = 2 << SB;   // two banks
+    reg [2:0] project_state;
+    reg [SB-1:0] slot;
     reg write_bank;
     reg [11:0] origin_x, origin_y;
     reg [1:0] direction;
-    reg [7:0] snapshot_active;
-    reg [95:0] snapshot_x, snapshot_y;
+    reg [SLOTS-1:0] snapshot_active;
+    reg [12*SLOTS-1:0] snapshot_x, snapshot_y;
     reg signed [12:0] dx, dy;
     reg signed [13:0] forward, side;
     reg signed [15:0] scale, vertical_scale;
@@ -48,11 +55,11 @@ module zombie_renderer #(
     wire [11:0] raw_height = vertical_scale[15:4];
     wire [7:0] height = raw_height>128 ? 8'd128 : raw_height[7:0];
     wire signed [15:0] center = 16'sd48 + (offset >>> 12);
-    reg [15:0] valid;
-    reg [12:0] depths [0:15];
-    reg signed [15:0] centers [0:15];
-    reg [7:0] heights [0:15];
-    wire [3:0] write_slot = {write_bank,slot};
+    reg [ENTRIES-1:0] valid;
+    reg [12:0] depths [0:ENTRIES-1];
+    reg signed [15:0] centers [0:ENTRIES-1];
+    reg [7:0] heights [0:ENTRIES-1];
+    wire [SB:0] write_slot = {write_bank,slot};
 
     always @(posedge clk) begin
         if(reset) begin project_state<=P_IDLE; done<=0; valid<=0; end
@@ -98,7 +105,7 @@ module zombie_renderer #(
                 centers[write_slot]<=center;
                 heights[write_slot]<=height;
                 depths[write_slot]<=forward;
-                if(slot==7) begin done<=1; project_state<=P_IDLE; end
+                if(slot==SLOTS-1) begin done<=1; project_state<=P_IDLE; end
                 else begin slot<=slot+1'b1; project_state<=P_READ; end
             end
             default: project_state<=P_IDLE;
@@ -110,13 +117,14 @@ module zombie_renderer #(
     reg [6:0] req_x;
     reg [5:0] req_y;
     reg req_bank, req_scene, req_valid;
-    reg [2:0] scan;
+    reg [SB-1:0] scan;
     reg candidate_valid;
     reg [12:0] candidate_depth, best_depth;
     reg signed [15:0] candidate_center;
     reg [7:0] candidate_height;
     reg [15:0] best_color;
-    wire [3:0] read_slot = {req_bank,scan};
+    wire [SB:0] read_slot = {req_bank,scan};
+    reg candidate_ally;
     reg signed [16:0] local_x;
     wire [16:0] abs_x = local_x<0 ? -local_x : local_x;
     wire signed [9:0] local_y = $signed({4'd0,req_y})-10'sd32+
@@ -132,12 +140,14 @@ module zombie_renderer #(
         if(local_y>=0 && local_y<$signed({2'd0,candidate_height}) && abs_x<half_width) begin
             if(local_y<$signed({2'd0,head_height})) begin
                 opaque=abs_x<head_width;
+                // Zombie: green head, yellow eyes. Player: skin head, dark eyes.
                 sprite_color=(local_y== $signed({3'd0,head_height[7:1]}) && abs_x!=0)
-                             ? 16'hffe0 : 16'h57c5;
+                             ? (candidate_ally ? 16'h2104 : 16'hffe0)
+                             : (candidate_ally ? 16'hEDB0 : 16'h57c5);
             end else if(local_y<$signed({2'd0,legs_start})) begin
-                opaque=1; sprite_color=16'h8816;
+                opaque=1; sprite_color=candidate_ally ? 16'h1A9F : 16'h8816;  // blue / purple
             end else begin
-                opaque=abs_x>=(half_width>>2); sprite_color=16'h294a;
+                opaque=abs_x>=(half_width>>2); sprite_color=candidate_ally ? 16'h4208 : 16'h294a;
             end
         end
     end
@@ -145,7 +155,7 @@ module zombie_renderer #(
     reg draw_candidate;
     reg [15:0] draw_color;
 
-    // The OLED holds each request long enough to scan all eight slots.
+    // The OLED holds each request long enough to scan all slots (4 clocks each).
     always @(posedge clk) begin
         if(reset) begin pixel_state<=PIX_IDLE; req_valid<=0; pixel<=0; end
         else if(!req_valid || req_x!=pixel_x || req_y!=pixel_y ||
@@ -159,6 +169,7 @@ module zombie_renderer #(
             PIX_READ: begin
                 candidate_valid<=valid[read_slot]; candidate_depth<=depths[read_slot];
                 candidate_center<=centers[read_slot]; candidate_height<=heights[read_slot];
+                candidate_ally<=HAS_ALLY && scan==SLOTS-1;
                 pixel_state<=PIX_OFFSET;
             end
             PIX_OFFSET: begin
@@ -171,7 +182,7 @@ module zombie_renderer #(
             end
             PIX_DRAW: begin
                 if(draw_candidate) begin best_depth<=candidate_depth; best_color<=draw_color; end
-                if(scan==7) begin
+                if(scan==SLOTS-1) begin
                     pixel<=draw_candidate ? draw_color : best_color;
                     pixel_state<=PIX_IDLE;
                 end else begin scan<=scan+1'b1; pixel_state<=PIX_READ; end

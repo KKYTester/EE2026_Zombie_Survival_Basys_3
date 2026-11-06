@@ -118,14 +118,18 @@ and controls) on the **same map**, like a survival race:
    builds the same map from the starting board's seed and starts its own run.
    If both boards start at the same moment, one of them is picked to choose
    the map and the other joins it.
-3. While playing, the seven-segment display shows your wave and your
-   partner's wave, and LED14-12 show your partner's hearts.
+3. While both of you are playing you can see your partner: a blue-shirted
+   figure in your 3D view (hidden behind walls like the zombies) and a yellow
+   tile on the SW0 map. The seven-segment display shows your wave and your
+   partner's wave, and LED14-12 show your partner's hearts. Zombies are not
+   shared: each board's zombies only chase that board's player.
 4. Each run ends on its own (game over or victory); the other board keeps
    playing. The end screen shows `PARTNER WAVE nn` (green while the partner
    is still playing).
 
 The link only carries a status word every 20 ms (state, 2-player flag,
-leader flag, game token, start priority, map seed, wave, hearts). See
+leader flag, game token, start priority, map seed, wave, hearts, position and
+view angle). See
 [docs/multiplayer-link.md](docs/multiplayer-link.md).
 
 Menus, generating screen, hearts, ten waves,
