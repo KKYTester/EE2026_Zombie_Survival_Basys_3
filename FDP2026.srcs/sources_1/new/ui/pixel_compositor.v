@@ -26,6 +26,9 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
     // Menu snapshot.
     input wire menu_sel, input wire [6:0] cursor_x, input wire [5:0] cursor_y,
     input wire [5:0] progress, input wire over_ready,
+    // Two-board title text: client_view = Player 2 board, link_up = UART link,
+    // allow_2p = the host may start a 2-player run.
+    input wire client_view, input wire link_up, input wire allow_2p,
     output wire [15:0] pixel_out);
     wire playing = game_state==3'd3;
     // Menu screen numbers: 0 title, 1 generating, 2 reserved, 3 game over, 4 victory.
@@ -56,6 +59,8 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
     menu_screens #(.ENABLE_2P(ENABLE_2P)) menu(.px(px),.py(py),.screen(menu_screen),
         .sel(menu_sel),.cursor_x(cursor_x),.cursor_y(cursor_y),.show_cursor(SHOW_CURSOR!=0),
         .progress(progress),.wave_tens(wave_tens),
-        .wave_ones(wave_ones),.over_ready(over_ready),.pixel(menu_pixel_data));
+        .wave_ones(wave_ones),.over_ready(over_ready),
+        .client_view(client_view),.link_up(link_up),.allow_2p(allow_2p),
+        .pixel(menu_pixel_data));
     assign pixel_out = playing ? play_pixel_data : menu_pixel_data;
 endmodule

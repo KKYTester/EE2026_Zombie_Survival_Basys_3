@@ -44,7 +44,6 @@ foreach source_file $source_files {
 }
 set constraint_files [list \
     [file join $root_dir FDP2026.srcs constrs_1 new Basys3_Master.xdc] \
-    [file join $root_dir constraints enemy_aim.xdc] \
     [file join $root_dir constraints multiplayer_zombie.xdc]]
 foreach constraint_file $constraint_files {
     set normalized [file normalize $constraint_file]

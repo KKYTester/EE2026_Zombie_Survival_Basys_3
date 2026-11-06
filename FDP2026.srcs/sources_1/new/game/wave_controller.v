@@ -3,7 +3,8 @@
 // there is no separate copy of the controller for wave 1, wave 2, etc.
 //
 // IDLE -> SPAWN_DELAY -> FIND_TILE -> WAIT_ACK --more to spawn--> SPAWN_DELAY
-//                                      |
+//               ^                      |  \--no ACK in 2^ACK_TIMEOUT_SHIFT--/
+//               |                      |     (drop request, search again)
 //                              last spawn accepted
 //                                      v
 //                                    FIGHT -> INTERMISSION -> next wave / WON
@@ -15,7 +16,8 @@
 module wave_controller #(
     parameter MAX_ALIVE=8, parameter MAX_WAVE_SIZE=21,
     parameter SPAWN_SHIFT=26, parameter CLEAR_SHIFT=27,
-    parameter MIN_DIST=8, parameter WIN_WAVE=10
+    parameter MIN_DIST=8, parameter WIN_WAVE=10,
+    parameter ACK_TIMEOUT_SHIFT=12          // give up on a spawn after 2^12 clocks (~41 us)
 )(
     input wire clk, input wire rst,
     input wire play_start, input wire playing,
@@ -37,7 +39,8 @@ module wave_controller #(
     localparam [2:0] W_INTERMISSION = 3'd4;
     localparam [2:0] W_WON          = 3'd5;
     localparam [2:0] W_FIGHT        = 3'd6;
-    localparam MAX_SHIFT = (SPAWN_SHIFT > CLEAR_SHIFT) ? SPAWN_SHIFT : CLEAR_SHIFT;
+    localparam MAX_SC = (SPAWN_SHIFT > CLEAR_SHIFT) ? SPAWN_SHIFT : CLEAR_SHIFT;
+    localparam MAX_SHIFT = (MAX_SC > ACK_TIMEOUT_SHIFT) ? MAX_SC : ACK_TIMEOUT_SHIFT;
     localparam [6:0] WAVE_CAP = MAX_WAVE_SIZE;
     localparam [5:0] ALIVE_CAP = MAX_ALIVE;
 
@@ -72,7 +75,12 @@ module wave_controller #(
     // defeat on the same clock leave alive unchanged but count both events.
     // Keep the selected tile free until the enemy manager accepts it.
     assign spawn_busy = state==W_FIND_TILE || state==W_WAIT_ACK;
-    wire spawn_accepted = state==W_WAIT_ACK && spawn_ack;
+    // Count every acknowledgement, in any state: if the enemy side accepts on the
+    // very clock this controller gives up (see W_WAIT_ACK), its ACK arrives one
+    // clock later in W_SPAWN_DELAY and must still be counted. No new request is
+    // made before a full spawn gap has passed, so a late ACK can only belong to
+    // the request that was just dropped.
+    wire spawn_accepted = spawn_ack;
     wire defeat_accepted = enemy_defeated && alive!=0;
 
     always @(posedge clk) begin
@@ -148,10 +156,18 @@ module wave_controller #(
                     W_WAIT_ACK: begin
                         // Hold spawn_req and spawn_tile until the enemy side
                         // accepts this enemy. A delayed ACK cannot duplicate it.
+                        // If it never answers (for example the player walked
+                        // onto the chosen tile), give up after 2^ACK_TIMEOUT_SHIFT
+                        // clocks, wait one spawn gap and search for a new tile.
                         if(spawn_ack) begin
                             spawn_req<=0;
+                            timer<=0;               // spawn gap starts from the ACK
                             state <= (spawned+7'd1==total) ? W_FIGHT : W_SPAWN_DELAY;
-                        end
+                        end else if(timer[ACK_TIMEOUT_SHIFT]) begin
+                            spawn_req<=0;
+                            timer<=0;
+                            state<=W_SPAWN_DELAY;
+                        end else timer<=timer+1'b1;
                     end
 
                     W_FIGHT: begin

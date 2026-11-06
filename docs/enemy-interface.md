@@ -238,7 +238,6 @@ below are proposed, not created by this task:
 | `FDP2026.srcs/sources_1/new/enemy/flow_field.v` | Shared map navigation; consume tiles rather than camera angles |
 | `FDP2026.srcs/sources_1/new/enemy/enemy_combat.v` | Shot targeting, damage and attack scheduling; final split may change |
 | `FDP2026.srcs/sources_1/new/enemy/zombie_renderer.v` | Sprite projection and depth comparison once camera contract is agreed |
-| `FDP2026.srcs/sources_1/new/demo/enemy_test_top.v` | Integrate against the map/game demo without editing its owner's demo in place |
 | `sim/enemy/` | Simulation-only testbenches, outside design sources |
 
 No common Verilog header is introduced until its first consumer exists. Keep

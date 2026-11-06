@@ -1,26 +1,29 @@
 `timescale 1ns / 1ps
-// Basys-to-Basys game link. The host receives the client's control byte and
-// periodically returns a 15-byte game snapshot. Game-specific meaning
-// for the snapshot is assigned by the top-level wrapper.
+// Basys-to-Basys game link. The client periodically sends INPUT_BYTES of
+// player data to the host; the host periodically returns a 15-byte game
+// snapshot and a 9-byte zombie list. Game-specific meaning of every payload
+// is assigned by the top-level wrapper.
 //
 // Packet types: 03 = HELLO, 04 = HELLO_ACK, 10 = INPUT(seq, controls),
-// 20 = STATE(seq, snapshot[119:0]). All packets use packet_tx/rx's A5 framing.
+// 20 = STATE(seq, snapshot[119:0]), 21 = ZOMBIES(seq, zombies[71:0]).
+// All packets use packet_tx/rx's A5 framing.
 module multiplayer_link #(
     parameter integer CLK_FREQ = 100_000_000,
     parameter integer INPUT_PERIOD_CYCLES = 2_000_000,  // 20 ms
     parameter integer STATE_PERIOD_CYCLES = 5_000_000,  // 50 ms
     parameter integer HELLO_PERIOD_CYCLES = 25_000_000, // 250 ms
-    parameter integer TIMEOUT_CYCLES = 50_000_000       // 500 ms
+    parameter integer TIMEOUT_CYCLES = 50_000_000,      // 500 ms
+    parameter integer INPUT_BYTES = 1                   // client payload, 1..15
 )(
     input wire clk,
     input wire rst,
     input wire host_mode,
     input wire uart_rx_pin,
     output wire uart_tx_pin,
-    input wire [7:0] local_controls,
+    input wire [8*INPUT_BYTES-1:0] local_controls,
     input wire [119:0] host_snapshot,
     input wire [71:0] host_zombies,
-    output reg [7:0] remote_controls,
+    output reg [8*INPUT_BYTES-1:0] remote_controls,
     output reg remote_controls_valid,
     output reg [119:0] client_snapshot,
     output reg client_snapshot_valid,
@@ -76,7 +79,7 @@ module multiplayer_link #(
                          send_hello ? PKT_HELLO : PKT_INPUT;
     wire [7:0] tx_len = send_state ? 8'd16 :
                         send_zombies ? 8'd10 :
-                        send_input ? 8'd2 : 8'd1;
+                        send_input ? INPUT_BYTES+1 : 8'd1;
     reg [8*MAX_PAYLOAD-1:0] tx_payload;
     always @* begin
         tx_payload = 0;
@@ -88,7 +91,7 @@ module multiplayer_link #(
             tx_payload[79:8] = host_zombies;
         end else if (send_input) begin
             tx_payload[7:0] = tx_sequence;
-            tx_payload[15:8] = local_controls;
+            tx_payload[8*INPUT_BYTES+7:8] = local_controls;
         end else begin
             tx_payload[7:0] = 8'h01; // protocol version
         end
@@ -154,8 +157,8 @@ module multiplayer_link #(
                         pkt_payload[7:0] == 8'h01) begin
                         link_up <= 1;
                         ack_due <= 1;
-                    end else if (pkt_type == PKT_INPUT && link_up && pkt_len == 2) begin
-                        remote_controls <= pkt_payload[15:8];
+                    end else if (pkt_type == PKT_INPUT && link_up && pkt_len == INPUT_BYTES+1) begin
+                        remote_controls <= pkt_payload[8*INPUT_BYTES+7:8];
                         remote_controls_valid <= 1;
                     end
                 end else begin

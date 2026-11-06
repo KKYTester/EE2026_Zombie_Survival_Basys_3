@@ -26,7 +26,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     parameter WIN_WAVE=10)(
     input wire clk, input wire rst,
     // Board
-    input wire btn_c, input wire btn_l,           // raw buttons, debounced here
+    input wire btn_c,                             // raw button, debounced here
     input wire btn_d,                             // one-clock title-menu selection pulse
     input wire sw_map,                            // raw switch: map overlay
     output wire [7:0] oled_jb,                    // Pmod OLEDrgb on JB
@@ -43,13 +43,16 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     // Game state
     output wire [2:0] game_state, output wire play_start,
     output wire [6:0] wave, output wire [1:0] health,
-    output wire selected_2p,
-    input wire display_override_enable,
-    input wire [2:0] display_game_state_override,
-    input wire [6:0] display_wave_override,
-    input wire [1:0] display_health_override,
-    input wire display_selected_2p_override,
-    input wire teammate_dead,
+    output wire selected_2p,                      // title selection; held during a run
+    output wire [6:0] remaining,                  // zombies left in this wave (HUD)
+    // Two-board play (ENABLE_2P). Host board: allow_2p lets 2 PLAYERS start;
+    // teammate_alive keeps a run going after this player's last heart.
+    input wire allow_2p, input wire teammate_alive,
+    // Player 2 board: follow=1 hands flow, map seed, wave and health to the host.
+    input wire follow, input wire link_up,
+    input wire [2:0] follow_state, input wire [15:0] follow_seed,
+    input wire [6:0] follow_wave, input wire [6:0] follow_remaining,
+    input wire [1:0] follow_health,
     // Player (Member 1)
     input wire [7:0] player_tile,                 // {y,x} tile the player stands on
     // Player position for the minimap: tiles with 4 fractional bits, y down
@@ -57,7 +60,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     // clockwise. {player_pos_y[7:4], player_pos_x[7:4]} should equal player_tile.
     input wire [7:0] player_pos_x, input wire [7:0] player_pos_y,
     input wire [9:0] player_angle,
-    input wire [7:0] player2_tile,
+    input wire [7:0] player2_tile,                // teammate's tile (2P minimap marker)
     // Display (Members 1 and 2)
     input wire [15:0] world_pixel,
     output wire [6:0] pixel_x, output wire [5:0] pixel_y,
@@ -84,11 +87,9 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
 
     // ---------------- Buttons ----------------
     // btnU/btnL/btnR/btnD are left free for Member 1's movement controls.
-    wire press_c,press_l;
+    wire press_c;
     button_debounce #(.STABLE_CYCLES(DEBOUNCE_CYCLES)) button_filter(
         .clk(clk),.rst(rst),.button(btn_c),.pressed(press_c));
-    button_debounce #(.STABLE_CYCLES(DEBOUNCE_CYCLES)) button_left(
-        .clk(clk),.rst(rst),.button(btn_l),.pressed(press_l));
 
     // ---------------- Game flow, map and play state ----------------
     wire ready,busy;
@@ -100,22 +101,35 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     wire damage,tint,low_blink;
     wire wave_clear,game_won;
     wire [5:0] alive;
-    wire [6:0] remaining;
+    wire [6:0] local_remaining;
+    wire [1:0] local_health;
+    wire local_damage;
     wire [255:0] zombies = occupied;
     wire playing_now = flow_state==3'd3;
     assign map_ready=ready; assign map_busy=busy; assign active_seed=seed;
     assign game_state=flow_state;
     assign selected_2p=menu_sel;
     assign enemies_clear = play_start || !playing_now;
+    assign remaining = local_remaining;
+    // On the Player 2 board the host tracks this player's hearts.
+    reg [1:0] follow_health_prev;
+    always @(posedge clk) follow_health_prev <= (rst || play_start) ? 2'd3 : follow_health;
+    wire follow_damage = playing_now && follow_health<follow_health_prev;
+    assign health = follow ? follow_health : local_health;
+    assign damage = follow ? follow_damage : local_damage;
+    wire alive_now = health!=2'd0;
+    wire [6:0] shown_wave = follow ? follow_wave : wave;
+    wire [6:0] shown_remaining = follow ? follow_remaining : local_remaining;
     // Fire: a new left-click or btnC during play. The menu never sees play clicks.
     reg mouse_left_prev, mouse_right_prev;
     always @(posedge clk) begin
         mouse_left_prev <= rst ? 1'b0 : mouse_left;
         mouse_right_prev <= rst ? 1'b0 : mouse_right;
     end
-    wire fire_request = playing_now && (press_c || (mouse_left && !mouse_left_prev));
+    // A player with no hearts left (teammate still alive) cannot shoot.
+    wire fire_request = playing_now && alive_now && (press_c || (mouse_left && !mouse_left_prev));
     // Reload: a new right-click during play (no button, so btnL stays free for movement).
-    wire reload_request = playing_now && (press_l || (mouse_right && !mouse_right_prev));
+    wire reload_request = playing_now && alive_now && mouse_right && !mouse_right_prev;
     wire weapon_flash, weapon_recoil, weapon_reloading;
     wire [2:0] ammo;
     wire [4:0] weapon_drop;
@@ -123,22 +137,26 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     // Free-running seed source: the time spent on the title screen picks the map.
     reg [15:0] seed_counter;
     always @(posedge clk) if(rst) seed_counter<=1; else seed_counter<=seed_counter+1'b1;
-    wire [15:0] generator_seed = (FIXED_MAP_SEED==16'h0000) ? seed_counter : FIXED_MAP_SEED;
+    // The Player 2 board generates the host's map from the host's final seed.
+    wire [15:0] generator_seed = follow ? follow_seed :
+                                 (FIXED_MAP_SEED==16'h0000) ? seed_counter : FIXED_MAP_SEED;
     game_flow #(.ENABLE_2P(ENABLE_2P),.GEN_SHIFT(GEN_SHIFT),
         .OVER_SHIFT(OVER_SHIFT)) flow(
         .clk(clk),.rst(rst),.btn_c(press_c),.btn_d(btn_d),.btn_l(1'b0),.btn_r(1'b0),
         .mouse_x(mouse_x),.mouse_y(mouse_y),.mouse_left(mouse_left),.mouse_event(mouse_event),
-        .map_ready(ready),.map_busy(busy),.health_zero((health==2'd0)||teammate_dead),.game_won(game_won),
+        .map_ready(ready),.map_busy(busy),.health_zero(!alive_now && !teammate_alive),.game_won(game_won),
+        .allow_2p(allow_2p),.follow(follow),.follow_state(follow_state),
         .state(flow_state),.sel(menu_sel),.regenerate(regenerate),.play_start(play_start),
         .progress(progress),.over_ready(over_ready));
     player_health hearts(.clk(clk),.rst(rst),.play_start(play_start),
-        .playing(playing_now),.hit(player_hit),.health(health),.damage(damage));
+        .playing(playing_now),.hit(player_hit && !follow),.health(local_health),.damage(local_damage));
+    // Only the host spawns zombies; the Player 2 board shows the host's waves.
     wave_controller #(.SPAWN_SHIFT(SPAWN_SHIFT),.CLEAR_SHIFT(CLEAR_SHIFT),.WIN_WAVE(WIN_WAVE)) waves(
-        .clk(clk),.rst(rst),.play_start(play_start),.playing(playing_now),
+        .clk(clk),.rst(rst),.play_start(play_start),.playing(playing_now && !follow),
         .map_bits(published_map),.occupied(zombies),.player_tile(player_tile),
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.wave(wave),
         .spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_busy(spawn_busy),.alive(alive),
-        .remaining(remaining),.wave_clear(wave_clear),.game_won(game_won));
+        .remaining(local_remaining),.wave_clear(wave_clear),.game_won(game_won));
     hud_effects_ctrl #(.TINT_SHIFT(TINT_SHIFT),
         .BLINK_SHIFT(BLINK_SHIFT)) effects_ctrl(
         .clk(clk),.rst(rst),.playing(playing_now),.damage(damage),
@@ -223,6 +241,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     reg [2:0] frame_error;
     reg [2:0] frame_screen;
     reg frame_sel,frame_tint,frame_blink,frame_over_ready;
+    reg frame_follow,frame_link,frame_allow_2p;
     reg [6:0] frame_cx; reg [5:0] frame_cy;
     reg [5:0] frame_progress;
     // Related clocks, explicitly constrained in XDC, not asynchronous CDC.
@@ -238,19 +257,21 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
             frame_screen<=0; frame_sel<=0;
             frame_cx<=48; frame_cy<=40; frame_progress<=0;
             frame_tint<=0; frame_blink<=0; frame_over_ready<=0;
+            frame_follow<=0; frame_link<=0; frame_allow_2p<=0;
         end else if(oled_frame_begin) begin
             frame_map<=published_map; frame_p1<=playing_now ? player_tile : p1_addr;
             frame_p2<=playing_now ? player2_tile : p2_addr;
             frame_pos_x<=player_pos_x; frame_pos_y<=player_pos_y; frame_angle<=player_angle;
-            frame_health<=display_override_enable ? display_health_override : health;
-            frame_wave<=display_override_enable ? display_wave_override : wave;
-            frame_remaining<=remaining; frame_zombies<=zombies;
+            frame_health<=health;
+            frame_wave<=shown_wave;
+            frame_remaining<=shown_remaining; frame_zombies<=zombies;
             frame_flash<=weapon_flash; frame_recoil<=weapon_recoil;
             frame_reloading<=weapon_reloading; frame_ammo<=ammo; frame_drop<=weapon_drop;
             frame_seed<=seed; frame_ready<=ready; frame_busy<=busy;
             frame_mode<=switch_sync[1]; frame_error<=error_code;
-            frame_screen<=display_override_enable ? display_game_state_override : flow_state;
-            frame_sel<=display_override_enable ? display_selected_2p_override : menu_sel;
+            frame_screen<=flow_state;
+            frame_sel<=menu_sel;
+            frame_follow<=follow; frame_link<=link_up; frame_allow_2p<=allow_2p;
             frame_cx<=mouse_x; frame_cy<=mouse_y; frame_progress<=progress;
             frame_tint<=tint; frame_blink<=low_blink;
             frame_over_ready<=over_ready;
@@ -269,7 +290,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .weapon_recoil(frame_recoil),.weapon_flash(frame_flash),.weapon_reloading(frame_reloading),
         .ammo(frame_ammo),.weapon_drop(frame_drop),
         .menu_sel(frame_sel),.cursor_x(frame_cx),.cursor_y(frame_cy),
-        .progress(frame_progress),.over_ready(frame_over_ready),.pixel_out(pixel_data));
+        .progress(frame_progress),.over_ready(frame_over_ready),
+        .client_view(frame_follow),.link_up(frame_link),.allow_2p(frame_allow_2p),.pixel_out(pixel_data));
 
     // The course OLED driver omits (95,63); the bridge sends this same composition.
     pixel_compositor #(.STAGE(STAGE),.ENABLE_2P(ENABLE_2P),.SHOW_CURSOR(SHOW_CURSOR)) last_pixel_compositor(
@@ -283,7 +305,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .weapon_recoil(frame_recoil),.weapon_flash(frame_flash),.weapon_reloading(frame_reloading),
         .ammo(frame_ammo),.weapon_drop(frame_drop),
         .menu_sel(frame_sel),.cursor_x(frame_cx),.cursor_y(frame_cy),
-        .progress(frame_progress),.over_ready(frame_over_ready),.pixel_out(last_pixel_data));
+        .progress(frame_progress),.over_ready(frame_over_ready),
+        .client_view(frame_follow),.link_up(frame_link),.allow_2p(frame_allow_2p),.pixel_out(last_pixel_data));
 
     wire raw_cs,raw_sdin,raw_sclk,raw_dcn;
     Oled_Display oled(.clk(oled_clk),.reset(oled_reset),.frame_begin(oled_frame_begin),

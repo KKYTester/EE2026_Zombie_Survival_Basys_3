@@ -72,54 +72,65 @@ recursively, and the hardware validation script uses the grouped paths.
 See [DeveloperGuide.md](DeveloperGuide.md) for prototype details, controls,
 rendering, and validation instructions.
 
-## Two-board zombie game
+## Game and two-board play
 
-`My_Top_Module` keeps the Fawaz map generator, title/HUD/OLED pipeline, raycaster,
-flow-field zombie AI, combat, and first-person zombie sprites. It adds a UART
-host/client link so two Basys 3 boards can play the same seeded map, each showing
-its own player's view. The host simulates the shared zombies and sends player
-positions, health, wave state, and zombie positions to the client.
+`My_Top_Module` is the whole game: Fawaz map generator, title/HUD/OLED
+pipeline, raycaster, flow-field zombie AI, camera-ray combat and first-person
+zombie sprites. Both boards get the **same bitstream**; SW1 picks the role.
 
-### Build and program both boards
+### Build and program
 
-In Vivado's Tcl Console, create the standalone multiplayer project from this
-checkout:
+In Vivado's Tcl Console run `create_project.tcl` (or
+`create_zombie_multiplayer.tcl`), then Synthesis, Implementation and Generate
+Bitstream. Program the same bitstream onto every board.
 
-```tcl
-source {D:/path/to/EE2026_Zombie_Survival_Basys_3/create_zombie_multiplayer.tcl}
-```
-
-Set `My_Top_Module` as the top if Vivado did not select it automatically, then
-run Synthesis, Implementation, and Generate Bitstream. Program both Basys 3
-boards with the same bitstream. The project includes the Basys 3/OLED pin map,
-the UART pins, and the player switch constraints.
-
-Connect each board's JC1/TX (K17) to the other board's JC2/RX (M18), and connect
-GND to GND. Both boards still need their own USB power/programming connection.
-Set SW3 high on the host and low on the client. LED15 indicates the UART link.
-On both boards, press BTN-D until the title highlights **2 PLAYERS**, then press
-BTN-C to start. Wait for map generation to finish on both OLEDs.
+### Controls (every board)
 
 | Control | Action |
 |---|---|
-| SW4 / SW5 / SW6 / SW7 | Move north / south / west / east one tile at a time |
-| SW1 / SW2 | Aim east / south / west / north (binary setting 00 / 01 / 10 / 11) |
-| BTN-C | Start the game from title; fire while playing |
-| BTN-L | Reload |
-| BTN-D | Toggle 1-player / 2-player selection on title |
-| BTN-U | Reset that board |
-| SW0 | Toggle the minimap |
-
-The client sends its controls to the host; the host runs the shared enemy AI and
-returns world state. The game uses cardinal, tile-step movement on the two-board
-setup so each board can control a player independently. Either player's health
-reaching zero ends the shared run. BTN-R is intentionally unused in gameplay.
-| SW0 | Toggle the full map overlay; player marker follows movement |
+| Mouse move | Turn (menu cursor on the title) |
+| BTN-U / BTN-D / BTN-L / BTN-R | Walk forward / back / strafe left / strafe right |
+| Left-click or BTN-C | Fire; click/BTN-C also confirms menus |
+| Right-click | Reload |
+| BTN-D on the title | Toggle 1 PLAYER / 2 PLAYERS (host board) |
+| SW0 | Toggle the full map overlay |
+| SW1 | Role: down = host / Player 1, up = Player 2 board |
 | SW13 / SW14, each flip | Test damage / defeat the lowest active zombie slot |
 | SW15 up, then down | Reset to title |
 | Seven-segment display | Active map seed |
+| LED14 / LED13 / LED12 | Link up / Player 2 board / 2-player run in progress |
 
-The 2-player option stays disabled. Menus, generating screen, hearts, ten waves,
+### One player
+
+Leave SW1 down, pick **1 PLAYER** and click (or BTN-C). Nothing else is
+needed: the UART link is ignored and a new random map is used each game.
+
+### Two players
+
+1. Connect JC1 (TX, K17) of each board to JC2 (RX, M18) of the other, and
+   GND to GND. Each board keeps its own USB power.
+2. Board A: SW1 **down** (host, Player 1). Board B: SW1 **up** (Player 2).
+   Board B shows `PLAYER 2` and `LINKED` once the link is up (LED14 on both).
+3. On the host, select **2 PLAYERS** (BTN-D or mouse) and start. Until the
+   Player 2 board is linked the title says `WAITING FOR P2` and will not start.
+4. Board B follows automatically: it builds the same map from the host's seed,
+   spawns on the Player 2 tile and plays its own first-person view with its
+   own mouse and buttons.
+
+The host runs the waves and all zombies. Zombies chase whichever player is
+nearer and attack either one; shots from both boards trace from that
+player's own camera. Each player has three hearts. A player who loses all
+hearts is frozen until the run ends; the run ends when both are down (or the
+host's player is down after the link is lost). The teammate is shown as a
+yellow tile on the SW0 map. If the link drops, the host carries on alone and
+Player 2 returns to its waiting screen.
+
+Link packets (115200 baud, 8N1): Player 2 -> host every 20 ms with its pose
+and shot counter; host -> Player 2 every 20 ms with game state, seed, wave,
+zombies left, both players' hearts, Player 1's tile and the zombie list. See
+[docs/multiplayer-link.md](docs/multiplayer-link.md).
+
+Menus, generating screen, hearts, ten waves,
 weapon animation/ammo/reload, damage effects, victory/game-over screens and
 return-to-title behavior are integrated into the game. Accepted shots trace from
 the actual player pose at the camera angle. The first zombie before a wall takes
@@ -132,8 +143,6 @@ renderers snapshot the same pose, prepare the back bank, and publish together.
 Sprite depth and wall depth use perpendicular camera distance. Horizontal sprite
 projection uses a pinhole approximation to the renderer's evenly spaced angle
 columns, so placement near the edges may differ by a small number of pixels.
-The two-player enemy interface remains opt-in and still needs the team's
-per-player health/weapon and UART integration.
 
 The generated map and UI use `{y,x}`, x right and y down, 1 wall / 0 floor.
 The integration reverses rows for the existing north-increasing renderer/player

@@ -1,19 +1,25 @@
 `timescale 1ns / 1ps
-// Single-player game flow:
+// Game flow:
 //   TITLE -> GENERATING -> PLAYING -> GAME OVER -> TITLE
 //                                 \-> VICTORY  -> TITLE
 //  - Title: mouse hover highlights an option, left-click on it confirms.
-//    BTN-D toggles the selection and BTN-C confirms it.
-//  - BTN-D toggles the highlighted player mode when ENABLE_2P = 1.
+//    BTN-D toggles the selection (ENABLE_2P = 1) and BTN-C confirms it.
+//    2 PLAYERS can only be confirmed while allow_2p is high (the other board
+//    is linked as Player 2).
 //  - Confirming consumes the press: it never reaches the playing state.
 //  - Generating: requests one new map (the seed is whatever the free-running
 //    counter holds at that moment) and shows the screen for at least
 //    2^GEN_SHIFT clocks so the player can read it.
 //  - A ready map enters PLAYING directly and pulses play_start for one clock.
-//  - Playing ends when health reaches 0 (GAME OVER) or when the last wave is
+//  - Playing ends when health_zero (GAME OVER) or when the last wave is
 //    survived (game_won, VICTORY); losing the last heart wins over winning.
 //    Both end screens ignore input for 2^OVER_SHIFT clocks (over_ready=0),
 //    then a click or btnC returns to the title.
+//
+// Follow mode (the Player 2 board): local input is ignored and the flow
+// tracks follow_state, the host's state. When the host is PLAYING its map seed
+// is final, so this board then generates the same map from that seed (the
+// caller routes the host seed to the map generator) and starts playing.
 module game_flow #(parameter ENABLE_2P = 0, parameter GEN_SHIFT = 26,
                    parameter OVER_SHIFT = 27)(
     input wire clk, input wire rst,
@@ -22,6 +28,8 @@ module game_flow #(parameter ENABLE_2P = 0, parameter GEN_SHIFT = 26,
     input wire mouse_left, input wire mouse_event,
     input wire map_ready, input wire map_busy,
     input wire health_zero, input wire game_won,
+    input wire allow_2p,
+    input wire follow, input wire [2:0] follow_state,
     output reg [2:0] state,            // 0 title, 1 generating, 2 reserved, 3 playing, 4 game over, 5 victory
     output reg sel,                    // 0 = 1 PLAYER, 1 = 2 PLAYERS
     output reg regenerate,             // one-clock new-map request
@@ -38,16 +46,52 @@ module game_flow #(parameter ENABLE_2P = 0, parameter GEN_SHIFT = 26,
     wire over_1p = in_x && mouse_y>=OPT1_Y0 && mouse_y<=OPT1_Y1;
     wire over_2p = in_x && mouse_y>=OPT2_Y0 && mouse_y<=OPT2_Y1 && ENABLE_2P;
     wire click = mouse_left && !left_prev;
-    wire click_confirm = click && (over_1p || over_2p);
-    wire click_sel = over_2p;                   // option under the pointer
+    wire click_confirm = click && (over_1p || (over_2p && allow_2p));
+    wire button_confirm = btn_c && (!sel || allow_2p);
     wire gen_done = timer[GEN_SHIFT];
     wire over_done = timer[OVER_SHIFT];
+    wire follow_end = follow_state==S_OVER || follow_state==S_WIN;
     assign progress = (state!=S_GEN) ? 6'd0 : (gen_done ? 6'd63 : timer[GEN_SHIFT-1 -: 6]);
-    assign over_ready = (state==S_OVER || state==S_WIN) && over_done;
+    // The host decides when an ended run returns to the title.
+    assign over_ready = !follow && (state==S_OVER || state==S_WIN) && over_done;
     always @(posedge clk) begin
         if(rst) begin
             state<=S_TITLE; sel<=0; regenerate<=0; play_start<=0; timer<=0;
             requested<=0; seen_busy<=0; left_prev<=0;
+        end else if(follow) begin
+            regenerate<=0; play_start<=0;
+            left_prev<=mouse_left;
+            sel<=1;
+            case(state)
+                S_TITLE: if(follow_state==S_GEN || follow_state==S_PLAY) begin
+                    state<=S_GEN; timer<=0; requested<=0; seen_busy<=0;
+                end
+                S_GEN: begin
+                    if(!gen_done) timer<=timer+1'b1;
+                    if(follow_state==S_TITLE) state<=S_TITLE;
+                    else if(follow_end) begin state<=follow_state; timer<=0; end
+                    else if(follow_state==S_PLAY) begin
+                        if(!requested && !map_busy) begin regenerate<=1; requested<=1; end
+                        if(requested && map_busy) seen_busy<=1;
+                        if(seen_busy && map_ready && !map_busy) begin
+                            state<=S_PLAY; timer<=0; play_start<=1;
+                        end else if(seen_busy && !map_busy && !map_ready) begin
+                            requested<=0; seen_busy<=0;
+                        end
+                    end
+                end
+                S_PLAY: if(follow_state!=S_PLAY) begin
+                    state <= follow_end ? follow_state : S_TITLE; timer<=0;
+                end
+                S_OVER, S_WIN: begin
+                    if(!over_done) timer<=timer+1'b1;
+                    if(follow_state==S_TITLE) state<=S_TITLE;
+                    else if(follow_state==S_GEN || follow_state==S_PLAY) begin
+                        state<=S_GEN; timer<=0; requested<=0; seen_busy<=0;
+                    end
+                end
+                default: state<=S_TITLE;
+            endcase
         end else begin
             regenerate<=0; play_start<=0;
             left_prev<=mouse_left;
@@ -56,7 +100,8 @@ module game_flow #(parameter ENABLE_2P = 0, parameter GEN_SHIFT = 26,
                     if(mouse_event && over_1p) sel<=0;
                     if(mouse_event && over_2p) sel<=1;
                     if(ENABLE_2P && btn_d) sel<=~sel;
-                    if(btn_c || click_confirm) begin
+                    if(button_confirm || click_confirm) begin
+                        if(click_confirm) sel<=over_2p;
                         state<=S_GEN; timer<=0; requested<=0; seen_busy<=0;
                     end
                 end

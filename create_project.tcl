@@ -36,7 +36,6 @@ set_property include_dirs [list $source_dir] [get_filesets sources_1]
 
 add_files -fileset constrs_1 -norecurse [list \
     [file join $root_dir FDP2026.srcs constrs_1 new Basys3_Master.xdc] \
-    [file join $root_dir constraints enemy_aim.xdc] \
     [file join $root_dir constraints multiplayer_zombie.xdc]]
 
 set_property top My_Top_Module [get_filesets sources_1]
