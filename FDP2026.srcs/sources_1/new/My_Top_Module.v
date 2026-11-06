@@ -84,7 +84,8 @@ module My_Top_Module #(
     wire [9:0] column_depth;
     wire scene_start, display_bank, scene_valid, sprites_ready;
     wire [7:0] render_active;
-    wire [95:0] render_x, render_y;
+    wire [95:0] render_x, render_y;      // real zombie positions (tile centres)
+    wire [95:0] glide_x, glide_y;        // drawn positions, walking between tiles
     // Give the player one clock to load a newly published spawn before scan 0.
     reg map_valid_delayed=0;
     always @(posedge clk) map_valid_delayed <= !reset && map_ready && !map_busy;
@@ -107,7 +108,7 @@ module My_Top_Module #(
         .clk(clk),.reset(renderer_reset),.prepare(scene_start),
         .display_bank(display_bank),.scene_valid(scene_valid),
         .camera_x(player_x[15:4]),.camera_y(camera_south),.camera_angle(player_angle[9:0]),
-        .facing(2'd0),.active(render_active),.zombie_x(render_x),.zombie_y(render_y),
+        .facing(2'd0),.active(render_active),.zombie_x(glide_x),.zombie_y(glide_y),
         .pixel_x(pixel_x),.pixel_y(pixel_y),.wall_depth({column_depth,3'b0}),
         .background(wall_pixel),.done(sprites_ready),.pixel(world_pixel));
     game_core #(.DEBOUNCE_CYCLES(DEBOUNCE_CYCLES),.GEN_SHIFT(GEN_SHIFT),.OVER_SHIFT(OVER_SHIFT),
@@ -151,4 +152,9 @@ module My_Top_Module #(
         .shot_hit_player(),.player_hit_p2(),.active(render_active),
         .render_x(render_x),.render_y(render_y),.read_id(3'd0),
         .read_active(),.read_x(),.read_y(),.read_hp(),.read_type(),.read_state(),.read_cooldown());
+    // Draw zombies walking smoothly: 256 steps per tile, finishing just
+    // before the next move tick (about 3% faster than the move rate).
+    zombie_glide #(.STEP_CYCLES(MOVE_PERIOD/264>0 ? MOVE_PERIOD/264 : 1)) glide(
+        .clk(clk),.rst(reset),.active(render_active),
+        .target_x(render_x),.target_y(render_y),.glide_x(glide_x),.glide_y(glide_y));
 endmodule

@@ -15,9 +15,10 @@ try {
         "$sourceRoot/game/player_health.v" "$sourceRoot/ui/weapon_ctrl.v" `
         "$sourceRoot/map/lfsr16.v" "$PSScriptRoot/tb_enemy_manager.v" `
         "$PSScriptRoot/tb_enemy_waves.v" "$PSScriptRoot/tb_zombie_renderer.v" `
-        "$PSScriptRoot/tb_enemy_two_players.v" "$PSScriptRoot/tb_camera_enemy.v"
+        "$PSScriptRoot/tb_enemy_two_players.v" "$PSScriptRoot/tb_camera_enemy.v" `
+        "$sourceRoot/enemy/zombie_glide.v" "$PSScriptRoot/tb_zombie_glide.v"
     if ($LASTEXITCODE -ne 0) { throw 'Verilog compilation failed' }
-    foreach ($testTop in @('tb_enemy_manager', 'tb_enemy_waves', 'tb_zombie_renderer', 'tb_enemy_two_players', 'tb_camera_enemy')) {
+    foreach ($testTop in @('tb_enemy_manager', 'tb_enemy_waves', 'tb_zombie_renderer', 'tb_enemy_two_players', 'tb_camera_enemy', 'tb_zombie_glide')) {
         & "$VivadoBin/xelab.bat" $testTop -s $testTop
         if ($LASTEXITCODE -ne 0) { throw "Elaboration failed: $testTop" }
         $simOutput = & "$VivadoBin/xsim.bat" $testTop -R 2>&1
