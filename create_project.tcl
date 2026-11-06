@@ -1,8 +1,12 @@
 # Resolve paths relative to this script, regardless of working directory.
 set root_dir [file dirname [file normalize [info script]]]
-set project_dir [file join $root_dir build FDP2026]
+set project_name FDP2026
+if {[info exists ::ee2026_project_name]} {
+    set project_name $::ee2026_project_name
+}
+set project_dir [file join $root_dir build $project_name]
 
-create_project FDP2026 $project_dir -part xc7a35tcpg236-1
+create_project $project_name $project_dir -part xc7a35tcpg236-1
 
 set_property target_language Verilog [current_project]
 set_property simulator_language Mixed [current_project]

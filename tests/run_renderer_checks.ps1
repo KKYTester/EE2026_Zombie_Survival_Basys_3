@@ -1,7 +1,7 @@
 param(
     [string]$VivadoBin = 'C:/AMDDesignTools/2025.2/Vivado/bin',
     [switch]$Hardware,
-    [string[]]$Tests = @('ray_caster_tb', 'map_renderer_tb', 'clock_enable_tb', 'player_controller_tb', 'mouse_top_tb', 'oled_renderer_tb', 'mouse_pointer_tb', 'runtime_map_tb')
+    [string[]]$Tests = @('ray_caster_tb', 'map_renderer_tb', 'clock_enable_tb', 'player_controller_tb', 'mouse_top_tb', 'oled_renderer_tb', 'mouse_pointer_tb', 'runtime_map_tb', 'enemy_renderer_integration_tb')
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot

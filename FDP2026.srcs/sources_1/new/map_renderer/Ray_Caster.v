@@ -19,7 +19,8 @@ module Ray_Caster #(
     output reg done, hit,
     output reg [6:0] height,
     output reg [9:0] distance_steps,
-    output reg [9:0] depth_steps
+    output reg [9:0] depth_steps,
+    output reg [7:0] hit_tile
 );
     localparam [2:0] IDLE=0, SETUP=1, TRACE=2, CORRECT=3, PROJECT=4;
     reg [2:0] state;
@@ -92,6 +93,7 @@ module Ray_Caster #(
                         done <= 1;
                         state <= IDLE;
                     end else if (wall) begin
+                        hit_tile<={ray_y[15:12],ray_x[15:12]};
                         hit <= 1;
                         distance_steps <= steps;
                         state <= CORRECT;
