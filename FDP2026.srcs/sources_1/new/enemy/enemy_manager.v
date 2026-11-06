@@ -3,10 +3,12 @@
 module enemy_manager #(
     parameter integer MAX_ENEMIES = 8,
     parameter integer COORD_FRAC_BITS = 8, // supported range: 1..27
+    parameter integer MOVE_SUBSTEPS = (COORD_FRAC_BITS>=5) ? 32 : (1<<COORD_FRAC_BITS),
     parameter [7:0] INITIAL_HP = 8'd3,
     parameter integer ATTACK_COOLDOWN_CYCLES = 100_000_000,
     parameter TWO_PLAYERS = 0,
     parameter USE_CAMERA_RAY = 0,
+    parameter USE_PLAYER_POSITIONS = 0,
     parameter integer ID_BITS = (MAX_ENEMIES > 1) ? $clog2(MAX_ENEMIES) : 1
 )(
     input wire clk, rst, clear, playing, map_ready,
@@ -16,6 +18,7 @@ module enemy_manager #(
     input wire debug_defeat, // one pulse removes the lowest active slot
     input wire move_tick, spawn_busy,
     input wire [7:0] player_tile,
+    input wire [31:0] player_pos_x, player_pos_y, player2_pos_x, player2_pos_y,
     input wire shot_fired,
     input wire [1:0] aim,
     input wire [31:0] camera_x, camera_y,
@@ -30,6 +33,7 @@ module enemy_manager #(
     output wire player_hit, player_hit_p2,
     output reg spawn_ack, enemy_defeated,
     output reg [255:0] occupied,
+    output wire [255:0] spawn_occupied,
     output reg [MAX_ENEMIES-1:0] active,
     output wire [MAX_ENEMIES*(COORD_FRAC_BITS+4)-1:0] render_x, render_y,
     // Combinational record lookup for debugging and future consumers.
@@ -41,9 +45,18 @@ module enemy_manager #(
     output reg [15:0] read_cooldown
 );
     localparam [31:0] HALF_TILE = 32'd1 << (COORD_FRAC_BITS-1);
+    localparam integer POSITION_BITS = COORD_FRAC_BITS+4;
     localparam [1:0] IDLE = 2'd0;
     reg [31:0] pos_x [0:MAX_ENEMIES-1];
     reg [31:0] pos_y [0:MAX_ENEMIES-1];
+    localparam integer PROGRESS_BITS = MOVE_SUBSTEPS>1 ? $clog2(MOVE_SUBSTEPS) : 1;
+    localparam [31:0] MOVE_STEP = (32'd1 << COORD_FRAC_BITS)/MOVE_SUBSTEPS;
+    reg [MAX_ENEMIES-1:0] moving;
+    reg [255:0] reserved;
+    reg [7:0] travel_origin [0:MAX_ENEMIES-1], travel_destination [0:MAX_ENEMIES-1];
+    reg [1:0] travel_direction [0:MAX_ENEMIES-1];
+    reg [PROGRESS_BITS-1:0] travel_progress [0:MAX_ENEMIES-1];
+    assign spawn_occupied=occupied | reserved;
     genvar render_slot;
     generate for(render_slot=0; render_slot<MAX_ENEMIES; render_slot=render_slot+1) begin : g_render
         localparam integer WIDTH=COORD_FRAC_BITS+4;
@@ -147,23 +160,32 @@ module enemy_manager #(
         end
     end
 
-    localparam [2:0] MOVE_IDLE=0, MOVE_READ=1, MOVE_LOOKUP=2, MOVE_PLAN=3,
-                     MOVE_CHECK=4, MOVE_APPLY=5, MOVE_NEXT=6;
-    reg [2:0] move_state;
+    localparam [3:0] MOVE_IDLE=0, MOVE_READ=1, MOVE_LOOKUP=2, MOVE_PLAN=3,
+                     MOVE_CHECK=4, MOVE_APPLY=5, MOVE_NEXT=6, MOVE_ADVANCE=7,
+                     MOVE_CONTACT=8;
+    reg [3:0] move_state;
     reg [ID_BITS-1:0] move_id, first_move_id;
     wire [ID_BITS-1:0] next_move_id =
         (move_id==MAX_ENEMIES-1) ? {ID_BITS{1'b0}} : move_id+1'b1;
     reg [7:0] old_tile, target_tile, candidate;
+    reg was_moving;
+    reg [1:0] step_direction;
+    reg [POSITION_BITS-1:0] current_x, current_y, next_x, next_y;
+    reg [POSITION_BITS-1:0] gap_x1, gap_y1, gap_x2, gap_y2;
+    reg close_to_player;
+    reg [PROGRESS_BITS-1:0] progress;
     wire field_ready, field_reachable;
     wire [1:0] field_direction;
     flow_field routes(.clk(clk),.reset(rst || clear),.enabled(playing && map_ready),
         .walls(map_bits),.goal(player_tile),.read_tile(old_tile),.ready(field_ready),
         .goal_active(p1_live),.goal2_active(p2_live),.goal2(player2_tile),
         .read_reachable(field_reachable),.read_direction(field_direction));
-    wire can_step = candidate != old_tile &&
-                    !(p1_live && candidate==target_tile) &&
-                    !(p2_live && candidate==player2_tile) &&
-                    !map_bits[candidate] && !occupied[candidate];
+    wire can_step = (was_moving || candidate != old_tile) &&
+                    (p1_live || p2_live) &&
+                    (MOVE_SUBSTEPS>1 || !(p1_live && candidate==target_tile)) &&
+                    (MOVE_SUBSTEPS>1 || !(p2_live && candidate==player2_tile)) &&
+                    !map_bits[candidate] &&
+                    (was_moving || (!occupied[candidate] && !reserved[candidate]));
 
     function [31:0] tile_center(input [3:0] tile_axis);
         tile_center = ({28'd0,tile_axis} << COORD_FRAC_BITS) + HALF_TILE;
@@ -197,7 +219,7 @@ module enemy_manager #(
     end
 
     wire accept_spawn = playing && map_ready && !combat_locked && spawn_req && !request_seen &&
-                        free_found && !map_bits[spawn_tile] && !occupied[spawn_tile] &&
+                        free_found && !map_bits[spawn_tile] && !spawn_occupied[spawn_tile] &&
                         (!TWO_PLAYERS || !p1_live || spawn_tile!=player_tile) &&
                         (!p2_live || spawn_tile!=player2_tile);
     wire debug_remove = playing && !combat_locked && (debug_defeat || debug_pending) && live_found;
@@ -208,9 +230,23 @@ module enemy_manager #(
     wire movement_enabled = playing && map_ready && !combat_locked && !spawn_busy && !spawn_req;
     wire target_changed = TWO_PLAYERS ? !field_ready : player_tile!=target_tile;
     wire apply_move = movement_enabled && !remove_enemy && !target_changed &&
+                      (MOVE_SUBSTEPS==1 || !close_to_player) &&
                       move_state==MOVE_APPLY;
-    wire [7:0] set_tile = apply_move ? candidate : spawn_tile;
+    wire [7:0] next_tile = {next_y[COORD_FRAC_BITS +:4],next_x[COORD_FRAC_BITS +:4]};
+    wire tile_changed = next_tile!=old_tile;
+    wire arriving = MOVE_SUBSTEPS==1 || (was_moving && progress==MOVE_SUBSTEPS-1);
+    wire [7:0] set_tile = apply_move ? next_tile : spawn_tile;
     wire [7:0] clear_tile = apply_move ? old_tile : remove_tile;
+    wire [POSITION_BITS-1:0] target_x1 = USE_PLAYER_POSITIONS ? player_pos_x :
+                                      tile_center(player_tile[3:0]);
+    wire [POSITION_BITS-1:0] target_y1 = USE_PLAYER_POSITIONS ? player_pos_y :
+                                      tile_center(player_tile[7:4]);
+    wire [POSITION_BITS-1:0] target_x2 = USE_PLAYER_POSITIONS ? player2_pos_x :
+                                      tile_center(player2_tile[3:0]);
+    wire [POSITION_BITS-1:0] target_y2 = USE_PLAYER_POSITIONS ? player2_pos_y :
+                                      tile_center(player2_tile[7:4]);
+    wire [POSITION_BITS:0] gap1 = {1'b0,gap_x1}+{1'b0,gap_y1};
+    wire [POSITION_BITS:0] gap2 = {1'b0,gap_x2}+{1'b0,gap_y2};
 
     localparam integer ATTACK_TIMER_BITS =
         (ATTACK_COOLDOWN_CYCLES>1) ? $clog2(ATTACK_COOLDOWN_CYCLES) : 1;
@@ -224,9 +260,43 @@ module enemy_manager #(
         wire [7:0] contact_tile = player_index==0 ? player_tile : player2_tile;
         wire contact_enabled = combat_enabled && (player_index==0 ? p1_live : p2_live);
         reg [ATTACK_TIMER_BITS-1:0] attack_timer;
-        reg [1:0] attack_dir;
+        reg [2:0] attack_dir;
         reg [7:0] attack_origin, attack_tile;
         reg attack_neighbor_valid, hit;
+        wire [POSITION_BITS-1:0] contact_x = USE_PLAYER_POSITIONS ?
+            (player_index==0 ? player_pos_x : player2_pos_x) : tile_center(contact_tile[3:0]);
+        wire [POSITION_BITS-1:0] contact_y = USE_PLAYER_POSITIONS ?
+            (player_index==0 ? player_pos_y : player2_pos_y) : tile_center(contact_tile[7:4]);
+        reg found_contact;
+        reg [ID_BITS-1:0] contact_id;
+        integer contact_i;
+        always @* begin
+            found_contact=0; contact_id=0;
+            for(contact_i=0;contact_i<MAX_ENEMIES;contact_i=contact_i+1)
+                if(active[contact_i] &&
+                   {pos_y[contact_i][COORD_FRAC_BITS +:4],
+                    pos_x[contact_i][COORD_FRAC_BITS +:4]}==attack_tile) begin
+                    found_contact=1; contact_id=contact_i;
+                end
+        end
+        reg [POSITION_BITS-1:0] contact_dx, contact_dy;
+        reg range_valid;
+        wire [POSITION_BITS:0] contact_distance = {1'b0,contact_dx}+{1'b0,contact_dy};
+        // Fractional positions prevent damage before the zombie reaches contact range.
+        always @(posedge clk) begin
+            range_valid<=contact_enabled && attack_neighbor_valid && found_contact &&
+                         attack_origin==contact_tile && !map_bits[attack_origin] &&
+                         !map_bits[attack_tile] && !remove_enemy && !accept_spawn;
+            contact_dx<=pos_x[contact_id]>contact_x ?
+                        pos_x[contact_id]-contact_x : contact_x-pos_x[contact_id];
+            contact_dy<=pos_y[contact_id]>contact_y ?
+                        pos_y[contact_id]-contact_y : contact_y-pos_y[contact_id];
+            if(!contact_enabled) range_valid<=0;
+        end
+        wire contact_in_range = MOVE_SUBSTEPS==1 ?
+            (attack_neighbor_valid && attack_origin==contact_tile &&
+             !map_bits[attack_origin] && !map_bits[attack_tile] && occupied[attack_tile]) :
+            (range_valid && contact_distance<=(33'd1 << COORD_FRAC_BITS));
         assign contact_hits[player_index]=hit;
 
         // Probe one edge-sharing tile per clock for this player.
@@ -235,13 +305,14 @@ module enemy_manager #(
                 attack_dir<=0;
                 attack_neighbor_valid<=0;
             end else begin
-                attack_dir<=attack_dir+1'b1;
+                attack_dir<=attack_dir==(MOVE_SUBSTEPS==1 ? 3 : 4) ? 0 : attack_dir+1'b1;
                 attack_origin<=contact_tile;
                 case(attack_dir)
                     2'd0: begin attack_tile<=contact_tile-8'd1;  attack_neighbor_valid<=contact_tile[3:0]!=0; end
                     2'd1: begin attack_tile<=contact_tile+8'd1;  attack_neighbor_valid<=contact_tile[3:0]!=15; end
                     2'd2: begin attack_tile<=contact_tile-8'd16; attack_neighbor_valid<=contact_tile[7:4]!=0; end
                     2'd3: begin attack_tile<=contact_tile+8'd16; attack_neighbor_valid<=contact_tile[7:4]!=15; end
+                    3'd4: begin attack_tile<=contact_tile; attack_neighbor_valid<=1; end
                 endcase
             end
         end
@@ -251,9 +322,7 @@ module enemy_manager #(
             hit<=0;
             if(!contact_enabled) attack_timer<=0;
             else if(attack_timer!=0) attack_timer<=attack_timer-1'b1;
-            else if(attack_neighbor_valid && attack_origin==contact_tile &&
-                    !map_bits[attack_origin] && !map_bits[attack_tile] &&
-                    occupied[attack_tile] && !remove_enemy) begin
+            else if(contact_in_range && !remove_enemy && !accept_spawn) begin
                 hit<=1;
                 attack_timer<=ATTACK_COOLDOWN_CYCLES-1;
             end
@@ -278,10 +347,18 @@ module enemy_manager #(
                 MOVE_READ: if(active[move_id]) begin
                     old_tile<={pos_y[move_id][COORD_FRAC_BITS +: 4],
                                pos_x[move_id][COORD_FRAC_BITS +: 4]};
-                    move_state<=MOVE_LOOKUP;
+                    current_x<=pos_x[move_id]; current_y<=pos_y[move_id];
+                    was_moving<=moving[move_id];
+                    progress<=travel_progress[move_id];
+                    if(moving[move_id]) begin
+                        candidate<=travel_destination[move_id];
+                        step_direction<=travel_direction[move_id];
+                        move_state<=MOVE_CHECK;
+                    end else move_state<=MOVE_LOOKUP;
                 end else move_state<=MOVE_NEXT;
                 MOVE_LOOKUP: move_state<=MOVE_PLAN;
                 MOVE_PLAN: if(field_reachable) begin
+                    step_direction<=field_direction;
                     case(field_direction)
                         2'd0: candidate<=old_tile-8'd1;
                         2'd1: candidate<=old_tile+8'd1;
@@ -290,7 +367,28 @@ module enemy_manager #(
                     endcase
                     move_state<=MOVE_CHECK;
                 end else move_state<=MOVE_NEXT;
-                MOVE_CHECK: move_state<=can_step ? MOVE_APPLY : MOVE_NEXT;
+                MOVE_CHECK: move_state<=can_step ? MOVE_CONTACT : MOVE_NEXT;
+                MOVE_CONTACT: begin
+                    gap_x1<=current_x>target_x1 ? current_x-target_x1 : target_x1-current_x;
+                    gap_y1<=current_y>target_y1 ? current_y-target_y1 : target_y1-current_y;
+                    gap_x2<=current_x>target_x2 ? current_x-target_x2 : target_x2-current_x;
+                    gap_y2<=current_y>target_y2 ? current_y-target_y2 : target_y2-current_y;
+                    move_state<=MOVE_ADVANCE;
+                end
+                MOVE_ADVANCE: begin
+                    close_to_player<=(p1_live && (candidate==player_tile || old_tile==player_tile) &&
+                                      gap1<=(33'd1 << COORD_FRAC_BITS)) ||
+                                     (p2_live && (candidate==player2_tile || old_tile==player2_tile) &&
+                                      gap2<=(33'd1 << COORD_FRAC_BITS));
+                    next_x<=current_x; next_y<=current_y;
+                    case(step_direction)
+                        2'd0: next_x<=current_x-MOVE_STEP;
+                        2'd1: next_x<=current_x+MOVE_STEP;
+                        2'd2: next_y<=current_y-MOVE_STEP;
+                        2'd3: next_y<=current_y+MOVE_STEP;
+                    endcase
+                    move_state<=MOVE_APPLY;
+                end
                 MOVE_APPLY: move_state<=MOVE_NEXT;
                 MOVE_NEXT: if(next_move_id==first_move_id) begin
                     // A full sweep is done. Rotate priority for the next tick.
@@ -305,15 +403,29 @@ module enemy_manager #(
     always @(posedge clk) begin
         spawn_ack<=0; enemy_defeated<=0;
         if(rst || clear) begin
-            active<=0; occupied<=0; request_seen<=0;
+            active<=0; occupied<=0; reserved<=0; moving<=0; request_seen<=0;
             for(reset_i=0; reset_i<MAX_ENEMIES; reset_i=reset_i+1) begin
                 pos_x[reset_i]<=0; pos_y[reset_i]<=0; hp[reset_i]<=0;
                 kind[reset_i]<=0; behaviour[reset_i]<=IDLE; cooldown[reset_i]<=0;
+                travel_origin[reset_i]<=0; travel_destination[reset_i]<=0;
+                travel_direction[reset_i]<=0; travel_progress[reset_i]<=0;
             end
         end else begin
             // Share two mask writes across movement, spawning and removal.
-            if(accept_spawn || apply_move) occupied[set_tile]<=1;
-            if(remove_enemy || apply_move) occupied[clear_tile]<=0;
+            if(accept_spawn || (apply_move && tile_changed)) occupied[set_tile]<=1;
+            if(remove_enemy || (apply_move && tile_changed)) occupied[clear_tile]<=0;
+            if(apply_move && !was_moving && MOVE_SUBSTEPS>1) begin
+                // Keep both ends of the segment unavailable until arrival.
+                reserved[old_tile]<=1; reserved[candidate]<=1;
+            end
+            if(apply_move && arriving && was_moving) begin
+                reserved[travel_origin[move_id]]<=0;
+                reserved[travel_destination[move_id]]<=0;
+            end
+            if(remove_enemy && moving[remove_id]) begin
+                reserved[travel_origin[remove_id]]<=0;
+                reserved[travel_destination[remove_id]]<=0;
+            end
             // A held request is accepted once; a low cycle rearms it.
             if(!spawn_req) request_seen<=0;
             if(accept_spawn) begin
@@ -321,6 +433,7 @@ module enemy_manager #(
                 pos_x[free_id]<=tile_center(spawn_tile[3:0]);
                 pos_y[free_id]<=tile_center(spawn_tile[7:4]);
                 hp[free_id]<=INITIAL_HP; kind[free_id]<=0;
+                moving[free_id]<=0; travel_progress[free_id]<=0;
                 behaviour[free_id]<=IDLE; cooldown[free_id]<=0;
                 spawn_ack<=1; request_seen<=1;
             end
@@ -328,12 +441,20 @@ module enemy_manager #(
             // target different slots. A full pool retries on the next cycle.
             if(remove_enemy) begin
                 active[remove_id]<=0; hp[remove_id]<=0;
+                moving[remove_id]<=0; travel_progress[remove_id]<=0;
                 behaviour[remove_id]<=IDLE; cooldown[remove_id]<=0;
                 enemy_defeated<=1;
             end else if(shot_hit) hp[damage_id]<=hp[damage_id]-8'd1;
             if(apply_move) begin
-                pos_x[move_id]<=tile_center(candidate[3:0]);
-                pos_y[move_id]<=tile_center(candidate[7:4]);
+                pos_x[move_id]<=next_x;
+                pos_y[move_id]<=next_y;
+                moving[move_id]<=!arriving;
+                travel_progress[move_id]<=was_moving ? progress+1'b1 : 1;
+                if(!was_moving) begin
+                    travel_origin[move_id]<=old_tile;
+                    travel_destination[move_id]<=candidate;
+                    travel_direction[move_id]<=step_direction;
+                end
             end
         end
     end
