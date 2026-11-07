@@ -13,8 +13,8 @@ boards with the updated bitstream; the earlier game protocol is incompatible.
 
 | Type | Length | Payload | Rate |
 |---|---:|---|---|
-| `30` STATUS | 23 | Sequence byte, 22 status bytes | Every 20 ms from each board |
-| `31` ZOMBIES | 27 | Same sequence byte, 26 zombie bytes | After the leader's STATUS during a shared run |
+| `30` STATUS | 25 | Sequence byte, 24 status bytes | Every 20 ms from each board |
+| `31` ZOMBIES | 30 | Same sequence byte, 29 zombie bytes | After the leader's STATUS during a shared run |
 
 The two payloads are sampled together. The receiver accepts a zombie update
 only once, after the STATUS with the same sequence, and renders it only for
@@ -45,6 +45,8 @@ counted separately and latched on LED9 and LED10 respectively until reset.
 | `[120:113]` | Follower only: queued shot event ID |
 | `[136:121]`, `[152:137]`, `[162:153]` | Follower only: shot X, Y and angle captured when fired, in the same units as pose |
 | `[170:163]` | Leader only: most recently accepted follower shot ID |
+| `[171]`, `[173:172]` | Leader only: wave-clear pause and follower hit counter |
+| `[182:176]`, `[189:183]` | Leader only: P1 and P2 kill scores |
 
 ## Zombie word (leader to follower)
 
@@ -54,6 +56,8 @@ counted separately and latched on LED9 and LED10 respectively until reset.
 | `[191:96]` | Eight zombie y positions, 12 bits each (Q4.8 tiles, y down) |
 | `[199:192]` | Active mask |
 | `[207:200]` | Game token |
+| `[223:208]` | Two-bit health value per zombie |
+| `[231:224]` | One attack-warning bit per zombie, slot 0 in bit 224 |
 
 ## Joining a game (`game_flow`)
 
@@ -90,6 +94,11 @@ distance to define the sides. The search prefers at least eight hops from both
 living players. If the preferred side has no such tile, it tries the farthest
 free tile on that side, with a two-hop minimum, before using the other side.
 With one survivor, the search uses that player alone.
+
+The leader starts and resolves zombie attacks. An attacker pauses and turns
+amber for about a quarter-second, then checks range and walls against the
+original target. A miss or a hit is followed by a brief recovery. Both boards
+draw the warning from the leader's snapshot.
 
 The leader counts the follower's hearts from
 `player_hit_p2` and returns them in the status word. The follower does not

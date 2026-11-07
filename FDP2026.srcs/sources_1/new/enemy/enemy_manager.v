@@ -12,6 +12,9 @@ module enemy_manager #(
     parameter TWO_PLAYERS = 0,
     parameter USE_CAMERA_RAY = 0,
     parameter USE_PLAYER_POSITIONS = 0,
+    parameter USE_AWARENESS = 0,
+    parameter integer ATTACK_WINDUP_CYCLES = 0,
+    parameter integer ATTACK_RECOVERY_CYCLES = 15_000_000,
     parameter integer ID_BITS = (MAX_ENEMIES > 1) ? $clog2(MAX_ENEMIES) : 1
 )(
     input wire clk, rst, clear, playing, map_ready,
@@ -44,6 +47,7 @@ module enemy_manager #(
     output reg [MAX_ENEMIES-1:0] active,
     output wire [MAX_ENEMIES*(COORD_FRAC_BITS+4)-1:0] render_x, render_y,
     output wire [2*MAX_ENEMIES-1:0] render_hp,   // hit points per slot, capped at 3 (health bars)
+    output wire [MAX_ENEMIES-1:0] render_windup,
     // Combinational record lookup for debugging and future consumers.
     input wire [ID_BITS-1:0] read_id,
     output reg read_active,
@@ -55,6 +59,8 @@ module enemy_manager #(
     localparam [31:0] HALF_TILE = 32'd1 << (COORD_FRAC_BITS-1);
     localparam integer POSITION_BITS = COORD_FRAC_BITS+4;
     localparam [1:0] IDLE = 2'd0;
+    localparam [1:0] CHASE = 2'd1, LAST_SEEN = 2'd2, SEARCH = 2'd3;
+    localparam [7:0] MEMORY_TICKS = 8'd255, SEARCH_TICKS = 8'd24;
     `include "Enemy_Path.vh"
     reg [31:0] pos_x [0:MAX_ENEMIES-1];
     reg [31:0] pos_y [0:MAX_ENEMIES-1];
@@ -80,13 +86,15 @@ module enemy_manager #(
     end endgenerate
     reg [1:0] kind [0:MAX_ENEMIES-1];
     reg [1:0] behaviour [0:MAX_ENEMIES-1];
+    reg [7:0] last_seen [0:MAX_ENEMIES-1], memory_left [0:MAX_ENEMIES-1];
+    reg [MAX_ENEMIES-1:0] preferred_player;
     reg [15:0] cooldown [0:MAX_ENEMIES-1];
     reg request_seen;
     reg free_found, live_found;
     reg [ID_BITS-1:0] free_id, live_id;
     integer select_i, reset_i, hit_i;
 
-    wire p1_live = !TWO_PLAYERS || player_active;
+    wire p1_live = (!TWO_PLAYERS && !USE_AWARENESS) || player_active;
     wire p2_live = TWO_PLAYERS && player2_active;
     wire combat_enabled = playing && map_ready && !rst && !clear;
     wire ray_busy, hit_valid, fire_ray, fire_p2, shots_waiting;
@@ -195,7 +203,8 @@ module enemy_manager #(
                      MOVE_CONTACT=8, MOVE_LOOK=9, MOVE_LOOK_WAIT=10,
                      MOVE_PROJECT=11, MOVE_DISTANCE=12, MOVE_SCALE=13,
                      MOVE_OFFSET=14, MOVE_AIM=15, MOVE_DELTA=16, MOVE_BLEND=17,
-                     MOVE_EXTEND=18, MOVE_VALIDATE=19;
+                     MOVE_EXTEND=18, MOVE_VALIDATE=19, MOVE_SIGHT_START=20,
+                     MOVE_SIGHT_WAIT=21, MOVE_SIGHT_DECIDE=22, MOVE_ROUTE_WAIT=23;
     reg [4:0] move_state;
     reg [ID_BITS-1:0] move_id, first_move_id;
     wire [ID_BITS-1:0] next_move_id =
@@ -210,6 +219,22 @@ module enemy_manager #(
         move_state==MOVE_LOOK_WAIT || move_state==MOVE_CONTACT) ? candidate : old_tile;
     wire field_ready, field_reachable;
     wire [2:0] field_direction;
+    wire field_second_goal;
+    reg [7:0] sight_tile1, sight_tile2, route_goal, route_goal2;
+    reg [1:0] sight_live, seen, route_players;
+    reg sight_player, route_active, route_active2, first_is_p2;
+    reg awareness_pending;
+    reg [1:0] next_behaviour;
+    reg [7:0] next_last_seen, next_memory;
+    reg next_preferred;
+    wire sight_done, sight_visible;
+    wire sees_p1=seen[0] && p1_live;
+    wire sees_p2=seen[1] && p2_live;
+    wire prefer_p2=sees_p2 && (!sees_p1 || preferred_player[move_id]);
+    wire follow_p2=first_is_p2 ^ field_second_goal;
+    wire route_lost_player=(route_players[0] && !p1_live) ||
+                           (route_players[1] && !p2_live);
+    wire route_usable=field_reachable && (!USE_AWARENESS || next_behaviour!=IDLE);
     reg [7:0] peek_tile;
     wire step_diagonal=segment_origin[3:0]!=candidate[3:0] && segment_origin[7:4]!=candidate[7:4];
     wire [7:0] step_side1={segment_origin[7:4],candidate[3:0]};
@@ -269,11 +294,15 @@ module enemy_manager #(
     wire planned_arrival=MOVE_SUBSTEPS==1 ||
         (remaining<=MOVE_STEP && (look_valid || near_center));
     flow_field routes(.clk(clk),.reset(rst || clear),.enabled(playing && map_ready),
-        .walls(map_bits),.goal(player_tile),.read_tile(field_read_tile),.ready(field_ready),
-        .goal_active(p1_live),.goal2_active(p2_live),.goal2(player2_tile),
-        .read_reachable(field_reachable),.read_direction(field_direction));
+        .walls(map_bits),.read_tile(field_read_tile),.ready(field_ready),
+        .goal(USE_AWARENESS ? route_goal : player_tile),
+        .goal2(USE_AWARENESS ? route_goal2 : player2_tile),
+        .goal_active(USE_AWARENESS ? route_active : p1_live),
+        .goal2_active(USE_AWARENESS ? route_active2 : p2_live),
+        .read_reachable(field_reachable),.read_direction(field_direction),
+        .read_second_goal(field_second_goal));
     wire can_step = (was_moving || candidate != old_tile) &&
-                    (p1_live || p2_live) &&
+                    (USE_AWARENESS || p1_live || p2_live) &&
                     (MOVE_SUBSTEPS>1 || !(p1_live && candidate==target_tile)) &&
                     (MOVE_SUBSTEPS>1 || !(p2_live && candidate==player2_tile)) &&
                     !map_bits[candidate] &&
@@ -324,7 +353,20 @@ module enemy_manager #(
     wire [7:0] remove_tile = lethal_hit ? damage_tile :
         {pos_y[live_id][COORD_FRAC_BITS +: 4], pos_x[live_id][COORD_FRAC_BITS +: 4]};
     wire movement_enabled = playing && map_ready && !combat_locked && !spawn_busy && !spawn_req;
-    wire target_changed = TWO_PLAYERS ? !field_ready : player_tile!=target_tile;
+    wire finish_awareness = USE_AWARENESS && move_state==MOVE_NEXT;
+    wire target_changed = !USE_AWARENESS &&
+        (TWO_PLAYERS ? !field_ready : player_tile!=target_tile);
+    if(USE_AWARENESS) begin : g_sight
+        zombie_sight eyes(
+            .clk(clk),.reset(rst || clear || !movement_enabled || remove_enemy),
+            .start(move_state==MOVE_SIGHT_START && sight_live[sight_player]),
+            .walls(map_bits),.from_tile(old_tile),
+            .to_tile(sight_player ? sight_tile2 : sight_tile1),
+            .done(sight_done),.visible(sight_visible));
+    end else begin : g_no_sight
+        assign sight_done=0;
+        assign sight_visible=0;
+    end
     wire [7:0] next_tile = {next_y[COORD_FRAC_BITS +:4],next_x[COORD_FRAC_BITS +:4]};
     wire step_valid = (MOVE_SUBSTEPS==1 || !close_to_player) && !map_bits[next_tile] &&
                       segment_has(segment_origin,candidate,next_tile) &&
@@ -351,9 +393,20 @@ module enemy_manager #(
     localparam integer ATTACK_TIMER_BITS =
         (ATTACK_COOLDOWN_CYCLES>1) ? $clog2(ATTACK_COOLDOWN_CYCLES) : 1;
     wire [1:0] contact_hits;
+    wire [1:0] attack_request;
+    wire [ID_BITS-1:0] attack_candidate [0:1];
+    wire [MAX_ENEMIES-1:0] attack_lock [0:1], attack_warning [0:1];
+    wire [MAX_ENEMIES-1:0] attack_locked = attack_lock[0] | attack_lock[1];
+    assign render_windup = attack_warning[0] | attack_warning[1];
     assign player_hit=contact_hits[0];
     assign player_hit_p2=contact_hits[1];
-    if(!TWO_PLAYERS) assign contact_hits[1]=0;
+    if(!TWO_PLAYERS) begin : g_no_second_attack
+        assign contact_hits[1]=0;
+        assign attack_request[1]=0;
+        assign attack_candidate[1]=0;
+        assign attack_lock[1]=0;
+        assign attack_warning[1]=0;
+    end
     genvar player_index;
     generate for(player_index=0; player_index<(TWO_PLAYERS ? 2 : 1);
                  player_index=player_index+1) begin : g_attack
@@ -381,6 +434,8 @@ module enemy_manager #(
         end
         reg [POSITION_BITS-1:0] contact_dx, contact_dy;
         reg [POSITION_BITS-1:0] sample_enemy_x,sample_enemy_y,sample_player_x,sample_player_y;
+        reg [POSITION_BITS-1:0] range_player_x,range_player_y;
+        reg [ID_BITS-1:0] sample_id,range_id;
         reg [7:0] sample_tile,range_tile;
         reg sample_valid,range_valid;
         wire [POSITION_BITS:0] contact_distance = {1'b0,contact_dx}+{1'b0,contact_dy};
@@ -392,8 +447,11 @@ module enemy_manager #(
                          !map_bits[attack_tile] && !remove_enemy && !accept_spawn;
             sample_enemy_x<=pos_x[contact_id]; sample_enemy_y<=pos_y[contact_id];
             sample_player_x<=contact_x; sample_player_y<=contact_y;
+            sample_id<=contact_id;
             sample_tile<=attack_origin;
             range_valid<=sample_valid && contact_enabled && !remove_enemy && !accept_spawn;
+            range_id<=sample_id;
+            range_player_x<=sample_player_x; range_player_y<=sample_player_y;
             range_tile<=sample_tile;
             contact_dx<=sample_enemy_x>sample_player_x ?
                         sample_enemy_x-sample_player_x : sample_player_x-sample_enemy_x;
@@ -404,6 +462,10 @@ module enemy_manager #(
             (attack_neighbor_valid && attack_origin==contact_tile &&
              !map_bits[attack_origin] && !map_bits[attack_tile] && occupied[attack_tile]) :
             (range_valid && range_tile==contact_tile && contact_distance<=(33'd1 << COORD_FRAC_BITS));
+        assign attack_candidate[player_index] = MOVE_SUBSTEPS==1 ? contact_id : range_id;
+        wire [ID_BITS-1:0] candidate_id=attack_candidate[player_index];
+        wire pursuing_player=!USE_AWARENESS ||
+            (behaviour[candidate_id]==CHASE && preferred_player[candidate_id]==(player_index==1));
         assign contact_hits[player_index]=hit;
 
         wire [7:0] contact_neighbor=neighbor_tile(contact_tile,attack_dir[2:0]);
@@ -425,14 +487,81 @@ module enemy_manager #(
             end
         end
 
-        // Multiple adjacent zombies share this player's cooldown.
-        always @(posedge clk) begin
-            hit<=0;
-            if(!contact_enabled) attack_timer<=0;
-            else if(attack_timer!=0) attack_timer<=attack_timer-1'b1;
-            else if(contact_in_range && !remove_enemy && !accept_spawn) begin
-                hit<=1;
-                attack_timer<=ATTACK_COOLDOWN_CYCLES-1;
+        if(ATTACK_WINDUP_CYCLES==0) begin : g_instant
+            assign attack_request[player_index]=0;
+            assign attack_lock[player_index]=0;
+            assign attack_warning[player_index]=0;
+            always @(posedge clk) begin
+                hit<=0;
+                if(!contact_enabled) attack_timer<=0;
+                else if(attack_timer!=0) attack_timer<=attack_timer-1'b1;
+                else if(contact_in_range && pursuing_player && !remove_enemy && !accept_spawn) begin
+                    hit<=1;
+                    attack_timer<=ATTACK_COOLDOWN_CYCLES-1;
+                end
+            end
+        end else begin : g_windup
+            localparam [1:0] IDLE=0, WINDUP=1, VERIFY=2, RECOVER=3;
+            // Nine tiles plus scanner and distance pipeline latency.
+            localparam VERIFY_CYCLES=16;
+            localparam MAX_ATTACK_CYCLES =
+                ATTACK_WINDUP_CYCLES>ATTACK_RECOVERY_CYCLES ?
+                ATTACK_WINDUP_CYCLES : ATTACK_RECOVERY_CYCLES;
+            localparam PHASE_BITS=$clog2(MAX_ATTACK_CYCLES>VERIFY_CYCLES ?
+                                       MAX_ATTACK_CYCLES : VERIFY_CYCLES);
+            reg [1:0] phase;
+            reg [PHASE_BITS-1:0] phase_timer;
+            reg [ID_BITS-1:0] owner;
+            reg sampled_during_verify,range_during_verify;
+            wire owner_removed=remove_enemy && remove_id==owner;
+            wire verify_hit = candidate_id==owner && contact_in_range &&
+                (MOVE_SUBSTEPS==1 ? found_contact :
+                 (range_during_verify && range_player_x==contact_x && range_player_y==contact_y));
+            assign attack_lock[player_index] = phase==IDLE ? 0 : ({{(MAX_ENEMIES-1){1'b0}},1'b1} << owner);
+            assign attack_warning[player_index] = phase==WINDUP || phase==VERIFY ?
+                                                  attack_lock[player_index] : 0;
+            // Start between movement sweeps so an already-planned step
+            // cannot commit after this slot is claimed.
+            assign attack_request[player_index] = phase==IDLE && contact_enabled &&
+                attack_timer==0 && move_state==MOVE_IDLE && contact_in_range && pursuing_player &&
+                (MOVE_SUBSTEPS!=1 || found_contact) && !attack_locked[candidate_id] &&
+                !remove_enemy && !accept_spawn;
+            wire grant = attack_request[player_index] &&
+                (player_index==0 || !attack_request[0] || attack_candidate[0]!=candidate_id);
+            always @(posedge clk) begin
+                sampled_during_verify<=phase==VERIFY;
+                range_during_verify<=sampled_during_verify;
+                hit<=0;
+                if(!combat_enabled) begin
+                    phase<=IDLE; phase_timer<=0; owner<=0; attack_timer<=0;
+                    sampled_during_verify<=0; range_during_verify<=0;
+                end else begin
+                    if(!contact_enabled) attack_timer<=0;
+                    else if(attack_timer!=0) attack_timer<=attack_timer-1'b1;
+                    if(phase!=IDLE && (!active[owner] || owner_removed)) begin
+                        phase<=IDLE;
+                    end else case(phase)
+                        IDLE: if(grant) begin
+                            owner<=candidate_id;
+                            phase<=WINDUP; phase_timer<=ATTACK_WINDUP_CYCLES-1;
+                        end
+                        WINDUP: if(!contact_enabled) begin
+                            phase<=RECOVER; phase_timer<=ATTACK_RECOVERY_CYCLES-1;
+                        end else if(phase_timer==0) begin
+                            phase<=VERIFY; phase_timer<=VERIFY_CYCLES-1;
+                        end else phase_timer<=phase_timer-1'b1;
+                        VERIFY: if(!contact_enabled || verify_hit || phase_timer==0) begin
+                            if(contact_enabled && verify_hit) begin
+                                hit<=1;
+                                attack_timer<=ATTACK_COOLDOWN_CYCLES-1;
+                            end
+                            phase<=RECOVER; phase_timer<=ATTACK_RECOVERY_CYCLES-1;
+                        end else phase_timer<=phase_timer-1'b1;
+                        RECOVER: if(ATTACK_RECOVERY_CYCLES==0 || phase_timer==0) phase<=IDLE;
+                                 else phase_timer<=phase_timer-1'b1;
+                        default: phase<=IDLE;
+                    endcase
+                end
             end
         end
     end endgenerate
@@ -446,7 +575,7 @@ module enemy_manager #(
     wire [255:0] removed_reservation=segment_mask(travel_origin[remove_id],travel_destination[remove_id]) |
         (has_look_reservation[remove_id] ?
          segment_mask(travel_destination[remove_id],look_reservation[remove_id]) : 256'd0);
-    // Read, plan, check and apply one slot at a time.
+    // Read, perceive, plan and apply one slot at a time.
     always @(posedge clk) begin
         if(rst || clear || !playing || !map_ready) begin
             move_state<=MOVE_IDLE; move_id<=0; first_move_id<=0; target_tile<=0;
@@ -458,17 +587,23 @@ module enemy_manager #(
             velocity_x<=0; velocity_y<=0; along_x<=0; along_y<=0;
             axis_remaining<=0; remaining<=0; extension<=0; offset<=0; offset_direction<=0;
             current_x<=0; current_y<=0; next_x<=0; next_y<=0;
+            sight_tile1<=0; sight_tile2<=0; sight_live<=0; seen<=0; sight_player<=0;
+            route_players<=0;
+            route_goal<=0; route_goal2<=0; route_active<=0; route_active2<=0;
+            first_is_p2<=0; awareness_pending<=0;
+            next_behaviour<=IDLE; next_last_seen<=0; next_memory<=0; next_preferred<=0;
         end else if(move_state!=MOVE_IDLE && target_changed) begin
             move_state<=MOVE_IDLE;
-        end else if(move_state!=MOVE_IDLE && (!movement_enabled || remove_enemy)) begin
+        end else if(move_state!=MOVE_IDLE && !finish_awareness &&
+                    (!movement_enabled || remove_enemy)) begin
             // Restart the slot if spawn selection or a removal interrupts it.
             move_state<=MOVE_READ;
-        end else if(movement_enabled && !remove_enemy) begin
+        end else if(finish_awareness || (movement_enabled && !remove_enemy)) begin
             case(move_state)
-                MOVE_IDLE: if(move_tick && field_ready) begin
+                MOVE_IDLE: if(move_tick && (USE_AWARENESS || field_ready)) begin
                     move_id<=first_move_id; target_tile<=player_tile; move_state<=MOVE_READ;
                 end
-                MOVE_READ: if(active[move_id]) begin
+                MOVE_READ: if(active[move_id] && !attack_locked[move_id]) begin
                     old_tile<={pos_y[move_id][COORD_FRAC_BITS +: 4],
                                pos_x[move_id][COORD_FRAC_BITS +: 4]};
                     current_x<=pos_x[move_id]; current_y<=pos_y[move_id];
@@ -482,29 +617,98 @@ module enemy_manager #(
                     if(moving[move_id]) begin
                         candidate<=travel_destination[move_id];
                         step_direction<=travel_direction[move_id];
-                        move_state<=TWO_PLAYERS ? MOVE_LOOKUP : MOVE_CHECK;
-                    end else move_state<=MOVE_LOOKUP;
-                end else move_state<=MOVE_NEXT;
-                MOVE_LOOKUP: move_state<=MOVE_PLAN;
-                MOVE_PLAN: if(TWO_PLAYERS && was_moving) begin
-                    // Reuse the owned footprint to turn back. Before crossing
-                    // into the destination tile, any changed arrow can send
-                    // us back to the origin. After crossing, reverse when the
-                    // new route leads back along this segment.
-                    if(field_reachable &&
-                       ((old_tile==segment_origin && field_direction!=step_direction) ||
-                        (old_tile==candidate && field_direction==(step_direction ^ 3'd1)))) begin
-                        candidate<=segment_origin;
-                        segment_origin<=candidate;
-                        step_direction<=step_direction ^ 3'd1;
-                        reversing<=1;
                     end
-                    move_state<=MOVE_CHECK;
-                end else if(field_reachable) begin
-                    step_direction<=field_direction;
-                    candidate<=neighbor_tile(old_tile,field_direction);
-                    move_state<=MOVE_CHECK;
-                end else move_state<=MOVE_NEXT;
+                    if(USE_AWARENESS) begin
+                        sight_tile1<=player_tile; sight_tile2<=player2_tile;
+                        sight_live<={p2_live,p1_live}; seen<=0; sight_player<=0;
+                        awareness_pending<=1;
+                        move_state<=MOVE_SIGHT_START;
+                    end else begin
+                        move_state<=moving[move_id] && !TWO_PLAYERS ? MOVE_CHECK : MOVE_LOOKUP;
+                    end
+                end else begin
+                    awareness_pending<=0;
+                    move_state<=MOVE_NEXT;
+                end
+                MOVE_SIGHT_START: if(sight_live[sight_player]) move_state<=MOVE_SIGHT_WAIT;
+                    else if(!sight_player && sight_live[1]) sight_player<=1;
+                    else move_state<=MOVE_SIGHT_DECIDE;
+                MOVE_SIGHT_WAIT: if(sight_done) begin
+                    seen[sight_player]<=sight_visible;
+                    if(!sight_player && sight_live[1]) begin
+                        sight_player<=1;
+                        move_state<=MOVE_SIGHT_START;
+                    end else move_state<=MOVE_SIGHT_DECIDE;
+                end
+                MOVE_SIGHT_DECIDE: begin
+                    next_last_seen<=last_seen[move_id];
+                    next_preferred<=preferred_player[move_id];
+                    route_players<={sees_p2,sees_p1};
+                    if(sees_p1 || sees_p2) begin
+                        // Seed the preferred player first so equal-cost routes stay
+                        // with that player. The field reports which seed won.
+                        route_goal<=prefer_p2 ? sight_tile2 : sight_tile1;
+                        route_goal2<=prefer_p2 ? sight_tile1 : sight_tile2;
+                        route_active<=1; route_active2<=sees_p1 && sees_p2;
+                        first_is_p2<=prefer_p2;
+                        next_behaviour<=CHASE;
+                        next_memory<=MEMORY_TICKS;
+                        move_state<=MOVE_ROUTE_WAIT;
+                    end else if((p1_live || p2_live) && memory_left[move_id]>1) begin
+                        if(old_tile==last_seen[move_id] && !was_moving) begin
+                            // Remain here and scan again each tick during the search.
+                            next_behaviour<=SEARCH;
+                            next_memory<=memory_left[move_id]>SEARCH_TICKS ?
+                                SEARCH_TICKS : memory_left[move_id]-1'b1;
+                            move_state<=MOVE_NEXT;
+                        end else begin
+                            route_goal<=last_seen[move_id];
+                            route_active<=1; route_active2<=0;
+                            next_behaviour<=LAST_SEEN;
+                            next_memory<=memory_left[move_id]-1'b1;
+                            move_state<=MOVE_ROUTE_WAIT;
+                        end
+                    end else begin
+                        next_behaviour<=IDLE;
+                        next_memory<=0;
+                        next_preferred<=0;
+                        // Settle the owned segment and release its reservation.
+                        // MOVE_PLAN ignores the cached field for this idle slot.
+                        move_state<=was_moving ? MOVE_PLAN : MOVE_NEXT;
+                    end
+                end
+                MOVE_ROUTE_WAIT: if(route_lost_player) move_state<=MOVE_READ;
+                                 else if(field_ready) move_state<=MOVE_LOOKUP;
+                MOVE_LOOKUP: move_state<=MOVE_PLAN;
+                MOVE_PLAN: if(USE_AWARENESS && route_lost_player) begin
+                    move_state<=MOVE_READ;
+                end else begin
+                    if(USE_AWARENESS && next_behaviour==CHASE) begin
+                        next_preferred<=follow_p2;
+                        next_last_seen<=follow_p2 ? sight_tile2 : sight_tile1;
+                    end
+                    if((TWO_PLAYERS || USE_AWARENESS) && was_moving) begin
+                        // Reuse the owned footprint to turn back. Before crossing
+                        // into the destination tile, any changed arrow can send
+                        // us back to the origin. After crossing, reverse when the
+                        // new route leads back along this segment.
+                        if((old_tile==segment_origin &&
+                            ((USE_AWARENESS && !route_usable) ||
+                             (route_usable && field_direction!=step_direction))) ||
+                           (old_tile==candidate && route_usable &&
+                            field_direction==(step_direction ^ 3'd1))) begin
+                            candidate<=segment_origin;
+                            segment_origin<=candidate;
+                            step_direction<=step_direction ^ 3'd1;
+                            reversing<=1;
+                        end
+                        move_state<=MOVE_CHECK;
+                    end else if(route_usable) begin
+                        step_direction<=field_direction;
+                        candidate<=neighbor_tile(old_tile,field_direction);
+                        move_state<=MOVE_CHECK;
+                    end else move_state<=MOVE_NEXT;
+                end
                 MOVE_CHECK: move_state<=can_step ? MOVE_LOOK : MOVE_NEXT;
                 MOVE_LOOK: move_state<=MOVE_LOOK_WAIT;
                 MOVE_LOOK_WAIT: begin
@@ -512,7 +716,8 @@ module enemy_manager #(
                     move_state<=MOVE_CONTACT;
                 end
                 MOVE_CONTACT: begin
-                    look_valid<=peek_available && MOVE_SUBSTEPS>1 && !reversing;
+                    look_valid<=peek_available && MOVE_SUBSTEPS>1 && !reversing &&
+                                (!USE_AWARENESS || next_behaviour!=IDLE);
                     look_direction<=field_direction; look_tile<=peek_tile;
                     gap_x1<=current_x>target_x1 ? current_x-target_x1 : target_x1-current_x;
                     gap_y1<=current_y>target_y1 ? current_y-target_y1 : target_y1-current_y;
@@ -520,8 +725,7 @@ module enemy_manager #(
                     gap_y2<=current_y>target_y2 ? current_y-target_y2 : target_y2-current_y;
                     move_state<=MOVE_SUBSTEPS==1 ? MOVE_ADVANCE : MOVE_PROJECT;
                 end
-                // Steering is deliberately serialized; a sweep is still <200
-                // clocks for eight slots, far below the 3,125,000-clock tick.
+                // Steering and route builds share the gap between movement ticks.
                 MOVE_PROJECT: begin
                     along_x<=oriented($signed({1'b0,center_x})-$signed({1'b0,current_x}),direction_x(step_direction));
                     along_y<=oriented($signed({1'b0,center_y})-$signed({1'b0,current_y}),direction_y(step_direction));
@@ -597,6 +801,8 @@ module enemy_manager #(
             for(reset_i=0; reset_i<MAX_ENEMIES; reset_i=reset_i+1) begin
                 pos_x[reset_i]<=0; pos_y[reset_i]<=0; hp[reset_i]<=0;
                 kind[reset_i]<=0; behaviour[reset_i]<=IDLE; cooldown[reset_i]<=0;
+                last_seen[reset_i]<=0; memory_left[reset_i]<=0;
+                preferred_player[reset_i]<=0;
                 look_reservation[reset_i]<=0;
                 travel_origin[reset_i]<=0; travel_destination[reset_i]<=0;
                 travel_direction[reset_i]<=0;
@@ -620,6 +826,8 @@ module enemy_manager #(
                 has_look_reservation[free_id]<=0;
                 moving[free_id]<=0;
                 behaviour[free_id]<=IDLE; cooldown[free_id]<=0;
+                last_seen[free_id]<=0; memory_left[free_id]<=0;
+                preferred_player[free_id]<=0;
                 spawn_ack<=1; request_seen<=1;
             end
             // Free/live selectors use pre-edge state, so simultaneous updates
@@ -629,8 +837,19 @@ module enemy_manager #(
                 has_look_reservation[remove_id]<=0;
                 moving[remove_id]<=0;
                 behaviour[remove_id]<=IDLE; cooldown[remove_id]<=0;
+                last_seen[remove_id]<=0; memory_left[remove_id]<=0;
+                preferred_player[remove_id]<=0;
                 enemy_defeated<=1;
             end else if(shot_hit) hp[damage_id]<=hp[damage_id]-8'd1;
+            // A movement step has already committed by MOVE_NEXT. Finish the
+            // matching perception update even if combat interrupts the sweep.
+            if(finish_awareness && awareness_pending && playing && map_ready &&
+               (!remove_enemy || remove_id!=move_id)) begin
+                behaviour[move_id]<=next_behaviour;
+                last_seen[move_id]<=next_last_seen;
+                memory_left[move_id]<=next_memory;
+                preferred_player[move_id]<=next_preferred;
+            end
             if(apply_move) begin
                 has_look_reservation[move_id]<=look_valid && !arriving;
                 look_reservation[move_id]<=look_tile;

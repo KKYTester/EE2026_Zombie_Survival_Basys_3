@@ -13,7 +13,8 @@ module tb_ally_sprite;
         .clk(clk),.reset(reset),.prepare(prepare),.display_bank(bank),.scene_valid(scene_valid),
         .camera_x(12'h180),.camera_y(12'h180),.facing(2'd0),.camera_angle(10'd0),
         .active(active),.zombie_x(zx),.zombie_y(zy),
-        .hp({18{1'b1}}),.dying(9'd0),.fall(36'd0),.pixel_x(px),.pixel_y(py),
+        .hp({18{1'b1}}),.dying(9'd0),.fall(36'd0),.winding_up(9'h100),
+        .pixel_x(px),.pixel_y(py),
         .wall_depth(13'd4096),.background(16'h0000),.done(done),.pixel(pixel));
     integer errors=0;
     task sample(input [6:0] x, input [5:0] y, output [15:0] c); begin
@@ -40,7 +41,7 @@ module tb_ally_sprite;
         $display("row 32: partner shirt pixels=%0d, zombie body pixels=%0d", ally_px, zombie_px);
         if(ally_px==0) begin $display("FAIL: partner not drawn"); errors=errors+1; end
         if(zombie_px==0) begin $display("FAIL: zombie not drawn"); errors=errors+1; end
-        if(errors==0) $display("PASS"); else $display("FAILED");
+        if(errors==0) $display("TB_ALLY_SPRITE: PASS"); else $display("FAILED");
         $finish;
     end
 endmodule

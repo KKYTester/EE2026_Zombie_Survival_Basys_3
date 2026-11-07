@@ -118,10 +118,11 @@ Both players are in **one shared game**: the same map, the same zombies.
    builds the same map from the starting board's seed and spawns on the map's
    second spawn tile. If both boards start at the same moment, one of them is
    picked to run the game and the other joins it.
-3. The starting board runs the waves and the zombies for both players. Zombies
-   chase whichever player is nearer (by walking distance) and attack either
-   one; shots from both boards hit them. The other board draws the same
-   zombies and sends its position, view angle and shots.
+3. The starting board runs the waves and the zombies for both players. Each
+   zombie chases the visible player with the shortest walkable route and
+   keeps its current target on a tie. Shots from both boards hit zombies.
+   The other board draws the same zombies and sends its position, view
+   angle and shots.
 4. You see your partner as a blue-shirted figure in your 3D view (hidden
    behind walls like the zombies) and as a yellow tile on the SW0 map.
    LED14-12 show your partner's hearts.
@@ -142,13 +143,21 @@ weapon animation/ammo/reload, damage effects, victory/game-over screens and
 return-to-title behavior are integrated into the game. Accepted shots trace from
 the actual player pose at the camera angle. The first zombie before a wall takes
 one damage, and three hits kill it. Adjacent zombies share a one-second player
-damage cooldown. Enemies use 32 fractional updates per second, moving at one
-tile per second on straight cardinal segments and rotating slot priority while
-following the live player's shared BFS
-field. BFS searches all eight neighbors with equal hop cost. Diagonals require
+damage cooldown. Enemies update 32 times per second and rotate slot priority.
+Each zombie checks sight in all directions using tile centres, up to six
+tiles along either axis. Walls block sight, including either side of an exact
+corner crossing. If sight is lost, the zombie follows its last seen tile and
+scans from there for about 0.75 seconds. Idle zombies stand still and keep
+scanning. A zombie gives up if it cannot reach the tile before its memory
+expires, about eight seconds after losing sight.
+
+The zombies share a BFS engine that searches all eight neighbors with equal
+hop cost. Diagonals require
 the destination and both side tiles to be floor, with no wrapping at map edges.
 The 256-entry queue visits each tile once; a full rebuild takes at most 4,357
-100 MHz clocks (about 44 microseconds), including two-player seeding. Fractional movement steers toward a point 0.25 tile ahead along the
+100 MHz clocks (about 44 microseconds), including two-player seeding.
+Fractional movement travels at one tile per second on straight cardinal
+segments and steers toward a point 0.25 tile ahead along the
 planned center-to-center path (`enemy_manager.LOOKAHEAD`, in coordinate units).
 Both direction components blend near turns; a blocked lookahead segment or a
 turn sharper than 90 degrees falls back to the current waypoint. Diagonal
@@ -156,8 +165,9 @@ lookahead distances use 181/256 and 362/256 approximations to 1/sqrt(2) and
 sqrt(2), so straight diagonal travel has approximately the same speed as
 cardinal travel. Its next tile is reserved before steering begins,
 and every proposed substep must remain on the current segment's floor tiles.
-Steering arithmetic is pipelined; an eight-slot sweep takes fewer than 200
-board clocks. A blended waypoint completes within one substep of its endpoint
+Steering arithmetic is pipelined. An eight-slot sweep can rebuild the field
+for each slot, using roughly 0.35 ms for those rebuilds at 100 MHz.
+A blended waypoint completes within one substep of its endpoint
 plane, retaining lateral motion. The proportional steering can slow movement
 at corners; Q8 substep rounding also slightly reduces diagonal speed. Sprites and minimap
 dots use the fractional positions. A trip reserves both endpoints until arrival;

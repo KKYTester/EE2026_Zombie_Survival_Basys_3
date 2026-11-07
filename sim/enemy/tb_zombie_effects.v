@@ -25,15 +25,17 @@ module tb_zombie_effects;
     // ---------------- zombie_renderer ----------------
     reg prepare=0, bank=0; reg [6:0] px=0; reg [5:0] py=0;
     reg [7:0] r_act=0; reg [95:0] rx=0, ry=0; reg [15:0] r_hp={8{2'd3}}; reg [7:0] r_dying=0; reg [31:0] r_fall=0;
+    reg [7:0] r_windup=0;
     wire done; wire [15:0] pixel;
     zombie_renderer #(.USE_CAMERA_POSE(1),.FOCAL_X(83),.FOCAL_Y(64)) ren(
         .clk(clk),.reset(rst),.prepare(prepare),.display_bank(bank),.scene_valid(1'b1),
         .camera_x(12'd640),.camera_y(12'd2176),.camera_angle(10'd0),.facing(2'd0),
         .active(r_act),.zombie_x(rx),.zombie_y(ry),.hp(r_hp),.dying(r_dying),.fall(r_fall),
+        .winding_up(r_windup),
         .pixel_x(px),.pixel_y(py),.wall_depth(13'd4095),.background(16'h0000),
         .done(done),.pixel(pixel));
     reg [15:0] img [0:95][0:63];
-    integer x, y, green_bar, red_bar, red_body, other_body, minx, maxx, miny, maxy, f;
+    integer x, y, green_bar, red_bar, red_body, other_body, amber_body, minx, maxx, miny, maxy, f;
     task render; begin
         // Prepare into the back bank, then show it.
         @(negedge clk); bank=0; prepare=1; @(negedge clk); prepare=0;
@@ -43,11 +45,13 @@ module tb_zombie_effects;
         end
     end endtask
     task measure; begin
-        green_bar=0; red_bar=0; red_body=0; other_body=0; minx=99; maxx=-1; miny=99; maxy=-1;
+        green_bar=0; red_bar=0; red_body=0; other_body=0; amber_body=0;
+        minx=99; maxx=-1; miny=99; maxy=-1;
         for(y=0;y<64;y=y+1) for(x=0;x<96;x=x+1) if(img[x][y]!=0) begin
             if(img[x][y]==16'h07E0) green_bar=green_bar+1;
             else if(img[x][y]==16'h8000) red_bar=red_bar+1;
             else begin
+                if(img[x][y]==16'hFD20) amber_body=amber_body+1;
                 // Red tint = full red, green and blue top bits cleared.
                 if(img[x][y][15:11]==5'h1F && !img[x][y][10] && !img[x][y][4]) red_body=red_body+1; else other_body=other_body+1;
                 if(x<minx) minx=x; if(x>maxx) maxx=x; if(y<miny) miny=y; if(y>maxy) maxy=y;
@@ -102,7 +106,10 @@ module tb_zombie_effects;
         if(green_bar<10 || red_bar<5) fail("hp 2 bar missing (2 green, 1 red segment)");
         if(green_bar!=2*red_bar) fail("bar segments not 2 green : 1 red");
         if(!(maxy-miny > maxx-minx)) fail("upright zombie is not taller than wide");
+        r_windup=8'd1; render; measure;
+        if(amber_body<20 || green_bar==0 || red_bar==0) fail("windup tint or health bar missing");
         r_dying=8'd1; r_fall[3:0]=4'd7; render; measure; keep(1);
+        if(amber_body!=0) fail("death tint lost priority over windup");
         if(green_bar!=0 || red_bar!=0) fail("dying zombie shows a bar");
         if(red_body<20 || other_body!=0) fail("falling zombie not tinted red");
         r_fall[3:0]=4'd15; render; measure; keep(2);

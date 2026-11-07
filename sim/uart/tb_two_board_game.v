@@ -129,6 +129,12 @@ module tb_two_board_game;
         // link; the leader's WAVE CLEAR pause starts the follower's banner;
         // zombie hit points reach the follower for its health bars.
         if(B.render_hp!==A.local_render_hp) fail("follower did not receive the zombie hit points");
+        force A.local_render_windup=8'd1;
+        for(i=0;i<80000 && B.render_windup[0]!==1'b1;i=i+1) @(posedge clk);
+        if(B.render_windup[0]!==1'b1) fail("follower did not receive the attack warning");
+        release A.local_render_windup;
+        for(i=0;i<80000 && B.render_windup[0]!==1'b0;i=i+1) @(posedge clk);
+        if(B.render_windup[0]!==1'b0) fail("follower attack warning did not clear");
         @(negedge clk); force A.shot_hit=1; force A.shot_hit_player=0;
         @(negedge clk); release A.shot_hit; release A.shot_hit_player;
         repeat(4) @(posedge clk);

@@ -18,7 +18,7 @@ module tb_zombie_renderer;
     zombie_renderer sprites(.clk(clk),.reset(reset),.prepare(prepare),
         .display_bank(bank),.scene_valid(scene_valid),.camera_x(12'd384),
         .camera_y(12'd384),.facing(facing),.active(active),.zombie_x(xs),.zombie_y(ys),
-        .hp({16{1'b1}}),.dying(8'd0),.fall(32'd0),
+        .hp({16{1'b1}}),.dying(8'd0),.fall(32'd0),.winding_up(8'd0),
         .pixel_x(x),.pixel_y(y),.wall_depth(depth),.background(16'h1234),
         .done(done),.pixel(pixel));
     demo_wall_view walls(.clk(clk),.reset(reset),.prepare(prepare),.display_bank(bank),

@@ -9,12 +9,14 @@ module flow_field(
     input wire [7:0] goal2,
     output wire ready,
     output reg read_reachable,
-    output reg [2:0] read_direction
+    output reg [2:0] read_direction,
+    output reg read_second_goal
 );
     localparam [2:0] START=0, POP=1, NEIGHBOR=2, VISIT=3, DONE=4, SEED_SECOND=5;
     reg [2:0] state;
     reg [7:0] field_goal, current, neighbor;
     reg [7:0] field_goal2;
+    reg current_second;
     reg field_active, field_active2;
     reg neighbor_allowed;
     reg [2:0] direction;
@@ -22,8 +24,8 @@ module flow_field(
     // Nine-bit indices distinguish an empty queue from 256 queued entries.
     reg [8:0] head, tail;
     reg [255:0] visited;
-    (* ram_style="block" *) reg [7:0] queue [0:255];
-    reg [2:0] arrows [0:255];
+    (* ram_style="block" *) reg [8:0] queue [0:255];
+    (* ram_style="block" *) reg [3:0] arrows [0:255];
 
     wire same_goals = field_active==goal_active && field_active2==goal2_active &&
                       (!goal_active || field_goal==goal) &&
@@ -41,14 +43,17 @@ module flow_field(
                     !walls[neighbor] && !visited[neighbor];
     wire [7:0] queue_write_addr=seed ? 8'd0 : tail[7:0];
     wire [7:0] queue_write_data=seed ? goal : seed2 ? goal2 : neighbor;
+    wire route_second=seed2 || (discover && current_second);
 
     // No memory reset needed. Visited bits qualify every stored arrow.
     always @(posedge clk) begin
         // A single write address and synchronous read infer one block RAM.
-        if(seed || seed2 || discover) queue[queue_write_addr]<=queue_write_data;
-        if(discover) arrows[neighbor]<=direction ^ 3'b001;
-        if(building && state==POP && head!=tail) current<=queue[head[7:0]];
-        read_direction<=arrows[read_tile];
+        if(seed || seed2 || discover) begin
+            queue[queue_write_addr]<={route_second,queue_write_data};
+            arrows[queue_write_data]<={route_second,direction ^ 3'b001};
+        end
+        if(building && state==POP && head!=tail) {current_second,current}<=queue[head[7:0]];
+        {read_second_goal,read_direction}<=arrows[read_tile];
         read_reachable<=ready && visited[read_tile] &&
                         !(field_active && read_tile==field_goal) &&
                         !(field_active2 && read_tile==field_goal2);
@@ -68,7 +73,7 @@ module flow_field(
                     state<=goal2_active ? SEED_SECOND : POP;
                 end
                 SEED_SECOND: begin
-                    // Seed both players before expanding either. P1 wins equal routes.
+                    // Seed both before expanding either. The first goal wins equal routes.
                     if(seed2) begin
                         visited[goal2]<=1;
                         tail<=tail+1'b1;

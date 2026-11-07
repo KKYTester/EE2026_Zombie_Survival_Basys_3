@@ -21,7 +21,7 @@ module enemy_renderer_integration_tb;
         .clk(clk),.reset(reset),.prepare(prepare),.display_bank(bank),.scene_valid(valid),
         .camera_x(12'd1408),.camera_y(12'd1408),.camera_angle(angle[9:0]),
         .facing(2'd0),.active(8'd1),.zombie_x(xs),.zombie_y(ys),
-        .hp(16'hFFFF),.dying(8'd0),.fall(32'd0),
+        .hp(16'hFFFF),.dying(8'd0),.fall(32'd0),.winding_up(8'd0),
         .pixel_x(7'd48),.pixel_y(6'd32),.wall_depth({depth,3'b0}),
         .background(wall_pixel),.done(sprites_done),.pixel(pixel));
 

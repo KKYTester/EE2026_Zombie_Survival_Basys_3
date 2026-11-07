@@ -22,6 +22,7 @@ module zombie_renderer #(
     input wire [12*SLOTS-1:0] zombie_x, zombie_y, // Packed Q8 tile coordinates, x right, y down.
     input wire [2*SLOTS-1:0] hp,          // hit points per slot (3 = full, no bar)
     input wire [SLOTS-1:0] dying,         // slot shows a falling corpse
+    input wire [SLOTS-1:0] winding_up,    // amber warning on the live zombie
     input wire [4*SLOTS-1:0] fall,        // fall step, 0 upright .. 15 flat
     input wire [6:0] pixel_x,
     input wire [5:0] pixel_y,
@@ -72,6 +73,8 @@ module zombie_renderer #(
     reg [7:0] heights [0:ENTRIES-1];
     reg [1:0] hps [0:ENTRIES-1];
     reg [ENTRIES-1:0] dyings;
+    reg [ENTRIES-1:0] windups;
+    reg [SLOTS-1:0] snapshot_windup;
     reg [3:0] falls [0:ENTRIES-1];
     wire [SB:0] write_slot = {write_bank,slot};
 
@@ -81,6 +84,7 @@ module zombie_renderer #(
             P_IDLE: if(prepare) begin
                 snapshot_active<=active; snapshot_x<=zombie_x; snapshot_y<=zombie_y;
                 snapshot_hp<=hp; snapshot_dying<=dying; snapshot_fall<=fall;
+                snapshot_windup<=winding_up;
                 origin_x<=camera_x; origin_y<=camera_y; direction<=facing;
                 sine<=sine_step(camera_angle);
                 cosine<=sine_step(camera_angle+10'd256);
@@ -122,6 +126,7 @@ module zombie_renderer #(
                 depths[write_slot]<=forward;
                 hps[write_slot]<=snapshot_hp[2*slot +: 2];
                 dyings[write_slot]<=snapshot_dying[slot];
+                windups[write_slot]<=snapshot_windup[slot];
                 falls[write_slot]<=snapshot_fall[4*slot +: 4];
                 if(slot==SLOTS-1) begin done<=1; project_state<=P_IDLE; end
                 else begin slot<=slot+1'b1; project_state<=P_READ; end
@@ -152,7 +157,7 @@ module zombie_renderer #(
     reg [7:0] candidate_height;
     reg [15:0] best_color;
     wire [SB:0] read_slot = {req_bank,scan};
-    reg candidate_ally, candidate_dying;
+    reg candidate_ally, candidate_dying, candidate_windup;
     reg [1:0] candidate_hp;
     reg [3:0] candidate_fall;
     reg signed [16:0] local_x;
@@ -204,6 +209,7 @@ module zombie_renderer #(
             end
         end
         sprite_color=body_color;
+        if(candidate_windup && !candidate_ally) sprite_color=16'hFD20;
         // Dying: Minecraft-style red tint (full red, green and blue darkened).
         if(candidate_dying) sprite_color={5'h1F, 1'b0, body_color[10:6], 1'b0, body_color[4:1]};
         if(show_bar && bar_row && bar_col) begin
@@ -232,6 +238,7 @@ module zombie_renderer #(
                 candidate_center<=centers[read_slot]; candidate_height<=heights[read_slot];
                 candidate_ally<=HAS_ALLY && scan==SLOTS-1;
                 candidate_hp<=hps[read_slot]; candidate_dying<=dyings[read_slot];
+                candidate_windup<=windups[read_slot];
                 candidate_fall<=falls[read_slot];
                 pixel_state<=PIX_OFFSET;
             end
