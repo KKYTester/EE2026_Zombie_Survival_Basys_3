@@ -5,29 +5,34 @@ module flow_field(
     input wire clk, reset, enabled,
     input wire [255:0] walls,
     input wire [7:0] goal, read_tile,
-    input wire goal_active, goal2_active,
+    input wire goal_active, goal2_active, limit_range,
     input wire [7:0] goal2,
     output wire ready,
     output reg read_reachable,
+    output reg read_in_field,
     output reg [2:0] read_direction,
     output reg read_second_goal
 );
     localparam [2:0] START=0, POP=1, NEIGHBOR=2, VISIT=3, DONE=4, SEED_SECOND=5;
+    localparam [2:0] HEARING_STEPS=3'd6;
     reg [2:0] state;
     reg [7:0] field_goal, current, neighbor;
     reg [7:0] field_goal2;
     reg current_second;
+    reg [2:0] current_depth;
     reg field_active, field_active2;
+    reg field_limited;
     reg neighbor_allowed;
     reg [2:0] direction;
     `include "Enemy_Path.vh"
     // Nine-bit indices distinguish an empty queue from 256 queued entries.
     reg [8:0] head, tail;
     reg [255:0] visited;
-    (* ram_style="block" *) reg [8:0] queue [0:255];
+    (* ram_style="block" *) reg [11:0] queue [0:255];
     (* ram_style="block" *) reg [3:0] arrows [0:255];
 
     wire same_goals = field_active==goal_active && field_active2==goal2_active &&
+                      field_limited==limit_range &&
                       (!goal_active || field_goal==goal) &&
                       (!goal2_active || field_goal2==goal2);
     assign ready = state==DONE && same_goals;
@@ -44,17 +49,21 @@ module flow_field(
     wire [7:0] queue_write_addr=seed ? 8'd0 : tail[7:0];
     wire [7:0] queue_write_data=seed ? goal : seed2 ? goal2 : neighbor;
     wire route_second=seed2 || (discover && current_second);
+    wire [2:0] route_depth=discover && field_limited ? current_depth+3'd1 : 3'd0;
+    wire tile_in_field=ready && visited[read_tile];
 
     // No memory reset needed. Visited bits qualify every stored arrow.
     always @(posedge clk) begin
         // A single write address and synchronous read infer one block RAM.
         if(seed || seed2 || discover) begin
-            queue[queue_write_addr]<={route_second,queue_write_data};
+            queue[queue_write_addr]<={route_depth,route_second,queue_write_data};
             arrows[queue_write_data]<={route_second,direction ^ 3'b001};
         end
-        if(building && state==POP && head!=tail) {current_second,current}<=queue[head[7:0]];
+        if(building && state==POP && head!=tail)
+            {current_depth,current_second,current}<=queue[head[7:0]];
         {read_second_goal,read_direction}<=arrows[read_tile];
-        read_reachable<=ready && visited[read_tile] &&
+        read_in_field<=tile_in_field;
+        read_reachable<=tile_in_field &&
                         !(field_active && read_tile==field_goal) &&
                         !(field_active2 && read_tile==field_goal2);
     end
@@ -68,6 +77,7 @@ module flow_field(
                     field_goal<=goal;
                     field_goal2<=goal2;
                     field_active<=goal_active; field_active2<=goal2_active;
+                    field_limited<=limit_range;
                     visited<=seed ? (256'd1 << goal) : 256'd0;
                     head<=0; tail<=seed ? 9'd1 : 9'd0;
                     state<=goal2_active ? SEED_SECOND : POP;
@@ -86,7 +96,7 @@ module flow_field(
                 end
                 NEIGHBOR: begin
                     neighbor<=neighbor_tile(current,direction);
-                    neighbor_allowed<=neighbor_valid_step;
+                    neighbor_allowed<=neighbor_valid_step && (!field_limited || current_depth<HEARING_STEPS);
                     state<=VISIT;
                 end
                 VISIT: begin

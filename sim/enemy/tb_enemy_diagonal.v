@@ -1,22 +1,26 @@
 `timescale 1ns / 1ps
 module tb_enemy_diagonal;
-    reg clk=0, clear=1, tick=0, req=0, defeat=0;
+    reg clk=0, clear=1, tick=0, req=0, defeat=0, fire=0;
     reg [255:0] walls=0;
     reg [7:0] spawn_tile=0, goal=8'h44;
     wire [95:0] xs,ys;
     wire [7:0] active;
     wire [255:0] occupied, reserved;
-    wire ack;
-    integer i,j;
+    wire ack, hit, kill;
+    integer i,j, shot_number, clocks, hits=0, kills=0;
     reg [255:0] expected_reservations;
     reg [7:0] a,b;
     always #5 clk=~clk;
+    always @(posedge clk) begin
+        if(hit) hits<=hits+1;
+        if(kill) kills<=kills+1;
+    end
     enemy_manager dut(.clk(clk),.rst(1'b0),.clear(clear),.playing(1'b1),.map_ready(1'b1),
         .map_bits(walls),.spawn_req(req),.spawn_tile(spawn_tile),.debug_defeat(defeat),
-        .move_tick(tick),.spawn_busy(1'b0),.player_tile(goal),.shot_fired(1'b0),.aim(2'd0),
+        .move_tick(tick),.spawn_busy(1'b0),.player_tile(goal),.shot_fired(fire),.aim(2'd0),
         .player_active(1'b1),.player2_active(1'b0),.player2_tile(8'd0),.shot_fired_p2(1'b0),
         .aim_p2(2'd0),.occupied(occupied),.spawn_occupied(reserved),.active(active),
-        .spawn_ack(ack),.render_x(xs),.render_y(ys),.read_id(3'd0));
+        .spawn_ack(ack),.shot_hit(hit),.shot_kill(kill),.render_x(xs),.render_y(ys),.read_id(3'd0));
     task step; begin @(negedge clk); end endtask
     task spawn(input [7:0] tile);
         begin spawn_tile=tile; req=1; step; if(!ack) $fatal(1,"diagonal spawn"); req=0; step; end
@@ -91,6 +95,24 @@ module tb_enemy_diagonal;
         if(dut.moving || xs[0+:12]!=384 || ys[0+:12]!=384) $fatal(1,"stale diagonal crossed side wall");
         clear=1; step;
         if(active || reserved) $fatal(1,"diagonal reset retained reservations");
+
+        // Shoot the second slot while it owns a diagonal and its lookahead.
+        // The first slot is moving too and must keep its separate reservation.
+        walls=0; clear=0; goal=8'h44;
+        spawn(8'h66); spawn(8'h11); sweep;
+        if(dut.moving[1:0]!=2'b11 || dut.has_look_reservation[1:0]!=2'b11 || !reserved[8'h33])
+            $fatal(1,"test did not reserve both moving footprints");
+        goal=8'h10;
+        for(shot_number=1;shot_number<=3;shot_number=shot_number+1) begin
+            fire=1; step; fire=0;
+            for(clocks=0;hits<shot_number && clocks<1500;clocks=clocks+1) step;
+            if(hits!=shot_number) $fatal(1,"moving zombie did not take the shot");
+            if(shot_number<3 && (kills!=0 || active!=8'h03 || !reserved[8'h33]))
+                $fatal(1,"nonlethal shot changed a reservation");
+        end
+        if(kills!=1 || active!=8'h01 || reserved[8'h11] || reserved[8'h12] ||
+           reserved[8'h21] || reserved[8'h22] || reserved[8'h33] || !reserved[8'h55])
+            $fatal(1,"lethal shot did not release only the hit zombie's full footprint");
         $display("TB_ENEMY_DIAGONAL: PASS"); $finish;
     end
     initial begin #1000000; $fatal(1,"diagonal movement timeout"); end

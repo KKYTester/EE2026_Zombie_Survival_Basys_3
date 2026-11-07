@@ -40,14 +40,22 @@ module tb_two_board_game;
         .ps2_clk(s_ps2c),.ps2_data(s_ps2d),.led(),.JB(),.seg(),.dp(),.an(),
         .uart_tx_pin(s_tx),.uart_rx_pin(1'b1));
 
-    integer errors=0, i, b_shots=0;
+    integer errors=0, i, b_shots=0, b_noises=0;
     reg watch_p2_hit=0, a_marked=0;
     always @(posedge clk) if(watch_p2_hit && A.hit_marker) a_marked=1;
     reg [9:0] first_angle,second_angle;
+    reg [7:0] first_noise_tile, second_noise_tile;
+    reg captured_noise=0;
     always @(posedge clk) if(A.partner_shot && A.partner_in_game) begin
         if(b_shots==0) first_angle=A.partner_shot_angle;
         if(b_shots==1) second_angle=A.partner_shot_angle;
         b_shots=b_shots+1;
+    end
+    always @(posedge clk) captured_noise<=A.enemies.g_hearing.capture2;
+    always @(negedge clk) if(captured_noise) begin
+        if(A.enemies.g_hearing.pending_tile2!==(b_noises==0 ? first_noise_tile : second_noise_tile))
+            fail("hearing used live P2 position instead of firing tile");
+        b_noises=b_noises+1;
     end
     task fail(input [8*64-1:0] msg); begin $display("FAIL: %0s", msg); errors=errors+1; end endtask
     // Task arguments are copies, so buttons are chosen by number.
@@ -173,26 +181,31 @@ module tb_two_board_game;
         $display("kills: P1 %0d, P2 %0d on both boards", A.game.p1_kills, B.game.p2_kills);
 
         // 5. Follower fires twice during a short packet blackout. Both shots
-        // keep their original pose even after turning. Block the return path
+        // keep their original poses even after moving. Block the return path
         // so the first accepted event is resent until a valid ACK gets back.
         block_b_to_a=1;
         force B.player_angle=32'd511;
+        first_noise_tile=B.player_tile;
         press(2);
         repeat(500) @(posedge clk);
         force B.player_angle=32'd777;
+        force B.player_x=32'hd800;
+        #1 second_noise_tile=B.player_tile;
         press(2);
         force B.player_angle=32'd900;
+        force B.player_x=32'hc800;
         repeat(40000) @(posedge clk);
         if(b_shots!=0 || B.shots.count!=2) fail("shots did not queue during packet loss");
         block_a_to_b=1; block_b_to_a=0;
         repeat(75000) @(posedge clk);
-        if(b_shots!=1 || B.shots.count!=2) fail("lost ACK caused duplicate or retired a shot");
+        if(b_shots!=1 || b_noises!=1 || B.shots.count!=2) fail("lost ACK caused duplicate or retired a shot");
         block_a_to_b=0;
         repeat(120000) @(posedge clk);
-        if(b_shots!=2 || B.shots.count!=0) fail("retry did not deliver exactly two shots");
+        if(b_shots!=2 || b_noises!=2 || B.shots.count!=0) fail("retry did not deliver exactly two shots");
         if(first_angle!=511 || second_angle!=777) fail("retry used live pose instead of firing pose");
         if(A.link_gaps==0) fail("missing status packets were not detected");
         release B.player_angle;
+        release B.player_x;
         // Zombies may also reach B during the test, so check the hearts went
         // down and that both boards agree on the count.
         hit_b(1);

@@ -13,12 +13,16 @@ module enemy_manager #(
     parameter USE_CAMERA_RAY = 0,
     parameter USE_PLAYER_POSITIONS = 0,
     parameter USE_AWARENESS = 0,
+    parameter USE_WANDER = 0,
+    parameter USE_PATROL = 0,
     parameter integer ATTACK_WINDUP_CYCLES = 0,
     parameter integer ATTACK_RECOVERY_CYCLES = 15_000_000,
     parameter integer ID_BITS = (MAX_ENEMIES > 1) ? $clog2(MAX_ENEMIES) : 1
 )(
     input wire clk, rst, clear, playing, map_ready,
     input wire [255:0] map_bits,
+    input wire [15:0] wander_seed,
+    input wire [7:0] patrol_tile1, patrol_tile2,
     input wire spawn_req,
     input wire [7:0] spawn_tile,
     input wire debug_defeat, // one pulse removes the lowest active slot
@@ -59,8 +63,9 @@ module enemy_manager #(
     localparam [31:0] HALF_TILE = 32'd1 << (COORD_FRAC_BITS-1);
     localparam integer POSITION_BITS = COORD_FRAC_BITS+4;
     localparam [1:0] IDLE = 2'd0;
-    localparam [1:0] CHASE = 2'd1, LAST_SEEN = 2'd2, SEARCH = 2'd3;
+    localparam [1:0] CHASE = 2'd1, FOLLOW_MEMORY = 2'd2, SEARCH = 2'd3;
     localparam [7:0] MEMORY_TICKS = 8'd255, SEARCH_TICKS = 8'd24;
+    localparam [6:0] PATROL_STALL_TICKS = 7'd64;
     `include "Enemy_Path.vh"
     reg [31:0] pos_x [0:MAX_ENEMIES-1];
     reg [31:0] pos_y [0:MAX_ENEMIES-1];
@@ -87,6 +92,13 @@ module enemy_manager #(
     reg [1:0] kind [0:MAX_ENEMIES-1];
     reg [1:0] behaviour [0:MAX_ENEMIES-1];
     reg [7:0] last_seen [0:MAX_ENEMIES-1], memory_left [0:MAX_ENEMIES-1];
+    reg [7:0] investigate_tile [0:MAX_ENEMIES-1];
+    reg [MAX_ENEMIES-1:0] memory_is_sound;
+    reg [MAX_ENEMIES-1:0] patrolling, patrol_second;
+    reg [6:0] patrol_ticks [0:MAX_ENEMIES-1];
+    function [6:0] wander_delay(input [2:0] slot);
+        wander_delay={2'b10,slot,2'b00}; // 64–92 sweeps at the board's 32 Hz.
+    endfunction
     reg [MAX_ENEMIES-1:0] preferred_player;
     reg [15:0] cooldown [0:MAX_ENEMIES-1];
     reg request_seen;
@@ -98,13 +110,15 @@ module enemy_manager #(
     wire p2_live = TWO_PLAYERS && player2_active;
     wire combat_enabled = playing && map_ready && !rst && !clear;
     wire ray_busy, hit_valid, fire_ray, fire_p2, shots_waiting;
+    wire shot_accept1, shot_accept2;
     wire [7:0] ray_origin;
     wire [1:0] ray_aim;
     wire [7:0] hit_tile;
-    reg hit_found, damage_pending, debug_pending;
+    reg hit_found, hit_lethal, damage_lethal, damage_pending, debug_pending;
     reg ray_player, damage_player;
     reg [ID_BITS-1:0] hit_id, damage_id;
     reg [7:0] damage_tile;
+    reg [25:0] hit_travel, damage_travel;
     // Camera pose of the shot being launched (USE_CAMERA_RAY).
     wire [31:0] shot_camera_x, shot_camera_y;
     wire [9:0] shot_camera_angle;
@@ -118,8 +132,8 @@ module enemy_manager #(
         wire issue_ready = combat_enabled && !ray_busy && !damage_pending;
         assign shot_ready = combat_enabled && p1_live && !pending_p1;
         assign shot_ready_p2 = combat_enabled && p2_live && !pending_p2;
-        wire capture_p1 = shot_ready && shot_fired;
-        wire capture_p2 = shot_ready_p2 && shot_fired_p2;
+        assign shot_accept1 = shot_ready && shot_fired;
+        assign shot_accept2 = shot_ready_p2 && shot_fired_p2;
         assign fire_ray = issue_ready && (pending_p1 || pending_p2);
         assign fire_p2 = !pending_p1;
         assign ray_origin = fire_p2 ? origin_p2 : origin_p1;
@@ -127,7 +141,7 @@ module enemy_manager #(
         assign shot_camera_x = fire_p2 ? pose_x_p2 : pose_x_p1;
         assign shot_camera_y = fire_p2 ? pose_y_p2 : pose_y_p1;
         assign shot_camera_angle = fire_p2 ? pose_angle_p2 : pose_angle_p1;
-        assign shots_waiting = pending_p1 || pending_p2 || capture_p1 || capture_p2;
+        assign shots_waiting = pending_p1 || pending_p2 || shot_accept1 || shot_accept2;
 
         // One mailbox per player. Resolve P1 first when both are pending.
         always @(posedge clk) begin
@@ -135,11 +149,11 @@ module enemy_manager #(
             else begin
                 if(fire_ray && !fire_p2) pending_p1<=0;
                 if(fire_ray && fire_p2) pending_p2<=0;
-                if(capture_p1) begin
+                if(shot_accept1) begin
                     pending_p1<=1; origin_p1<=player_tile; facing_p1<=aim;
                     pose_x_p1<=camera_x; pose_y_p1<=camera_y; pose_angle_p1<=camera_angle;
                 end
-                if(capture_p2) begin
+                if(shot_accept2) begin
                     pending_p2<=1; origin_p2<=player2_tile; facing_p2<=aim_p2;
                     pose_x_p2<=camera2_x; pose_y_p2<=camera2_y; pose_angle_p2<=camera2_angle;
                 end
@@ -148,6 +162,8 @@ module enemy_manager #(
     end else begin : g_single_shot
         assign shot_ready = combat_enabled && !ray_busy && !damage_pending;
         assign shot_ready_p2 = 0;
+        assign shot_accept1 = shot_ready && shot_fired && p1_live;
+        assign shot_accept2 = 0;
         assign fire_ray = shot_fired;
         assign fire_p2 = 0;
         assign ray_origin = player_tile;
@@ -165,22 +181,26 @@ module enemy_manager #(
         .shot_fired(fire_ray),.player_tile(ray_origin),.aim(ray_aim),.walls(map_bits),
         .active(active),.position_x(render_x),.position_y(render_y),
         .occupied(occupied),.busy(ray_busy),.hit_valid(hit_valid),.hit_tile(hit_tile));
-    // Resolve the tile to a slot before applying damage on the next clock.
+    // Resolve the hit and snapshot the slot's travel record together.
+    // Tile ownership is unique, so the matching record can be OR-selected.
     always @* begin
-        hit_found=0; hit_id=0;
+        hit_found=0; hit_id=0; hit_lethal=0; hit_travel=0;
         for(hit_i=0; hit_i<MAX_ENEMIES; hit_i=hit_i+1)
             if(active[hit_i] &&
                {pos_y[hit_i][COORD_FRAC_BITS +: 4],
                 pos_x[hit_i][COORD_FRAC_BITS +: 4]}==hit_tile) begin
                 hit_found=1;
                 hit_id=hit_i;
+                hit_lethal=hit_lethal || hp[hit_i]<=8'd1;
+                hit_travel=hit_travel | {moving[hit_i],has_look_reservation[hit_i],
+                    travel_origin[hit_i],travel_destination[hit_i],look_reservation[hit_i]};
             end
     end
     // Hold tile ownership stable from the trigger through damage commit.
     wire combat_locked = shots_waiting || ray_busy || damage_pending;
     assign shot_hit = damage_pending && playing && map_ready && !rst && !clear;
     assign shot_hit_player = damage_player;
-    wire lethal_hit = shot_hit && hp[damage_id]<=8'd1;
+    wire lethal_hit = shot_hit && damage_lethal;
     assign shot_kill = lethal_hit;
     always @(posedge clk) begin
         if(rst || clear || !playing || !map_ready) begin
@@ -193,6 +213,8 @@ module enemy_manager #(
                 damage_id<=hit_id;
                 damage_tile<=hit_tile;
                 damage_player<=ray_player;
+                damage_lethal<=hit_lethal;
+                damage_travel<=hit_travel;
             end
             debug_pending<=combat_locked && (debug_defeat || debug_pending);
         end
@@ -204,7 +226,10 @@ module enemy_manager #(
                      MOVE_PROJECT=11, MOVE_DISTANCE=12, MOVE_SCALE=13,
                      MOVE_OFFSET=14, MOVE_AIM=15, MOVE_DELTA=16, MOVE_BLEND=17,
                      MOVE_EXTEND=18, MOVE_VALIDATE=19, MOVE_SIGHT_START=20,
-                     MOVE_SIGHT_WAIT=21, MOVE_SIGHT_DECIDE=22, MOVE_ROUTE_WAIT=23;
+                     MOVE_SIGHT_WAIT=21, MOVE_SIGHT_DECIDE=22, MOVE_ROUTE_WAIT=23,
+                     MOVE_HEAR_WAIT=24, MOVE_HEAR_DECIDE=25, MOVE_MEMORY=26,
+                     MOVE_ROAM_PICK=27, MOVE_PATROL_SCORE=28, MOVE_PATROL_GOAL=29,
+                     MOVE_WANDER=30;
     reg [4:0] move_state;
     reg [ID_BITS-1:0] move_id, first_move_id;
     wire [ID_BITS-1:0] next_move_id =
@@ -212,21 +237,42 @@ module enemy_manager #(
     reg [7:0] old_tile, target_tile, candidate,segment_origin,old_look_tile,old_look_base;
     reg was_moving,old_look_valid,reversing;
     reg [2:0] step_direction;
+    reg roam_probe;
+    reg [1:0] roam_attempt;
+    wire [15:0] wander_random;
     reg [2:0] look_direction;
     reg look_valid;
     reg [7:0] look_tile;
     wire [7:0] field_read_tile = (move_state==MOVE_LOOK ||
         move_state==MOVE_LOOK_WAIT || move_state==MOVE_CONTACT) ? candidate : old_tile;
-    wire field_ready, field_reachable;
+    wire field_ready, field_reachable, field_in_range;
     wire [2:0] field_direction;
     wire field_second_goal;
     reg [7:0] sight_tile1, sight_tile2, route_goal, route_goal2;
     reg [1:0] sight_live, seen, route_players;
     reg sight_player, route_active, route_active2, first_is_p2;
+    reg route_limited;
+    wire [7:0] sound_tile1, sound_tile2;
+    wire sound1_for_slot, sound2_for_slot;
     reg awareness_pending;
     reg [1:0] next_behaviour;
-    reg [7:0] next_last_seen, next_memory;
-    reg next_preferred;
+    reg [7:0] next_last_seen, next_investigate_tile, next_memory;
+    reg next_preferred, next_memory_is_sound;
+    reg next_patrol, next_patrol_second;
+    reg [6:0] next_patrol_ticks;
+    reg [4:0] patrol_dist1, patrol_dist2;
+    function [4:0] tile_distance(input [7:0] a, b);
+        reg [3:0] dx, dy;
+        begin
+            dx=a[3:0]>=b[3:0] ? a[3:0]-b[3:0] : b[3:0]-a[3:0];
+            dy=a[7:4]>=b[7:4] ? a[7:4]-b[7:4] : b[7:4]-a[7:4];
+            tile_distance={1'b0,dx}+{1'b0,dy};
+        end
+    endfunction
+    wire pick_patrol2=patrol_dist2>patrol_dist1;
+    wire [7:0] current_patrol_goal=patrol_second[move_id] ? patrol_tile2 : patrol_tile1;
+    wire [7:0] remembered_tile=memory_is_sound[move_id] ? investigate_tile[move_id] : last_seen[move_id];
+    wire [7:0] heard_tile=field_second_goal ? route_goal2 : route_goal;
     wire sight_done, sight_visible;
     wire sees_p1=seen[0] && p1_live;
     wire sees_p2=seen[1] && p2_live;
@@ -234,7 +280,8 @@ module enemy_manager #(
     wire follow_p2=first_is_p2 ^ field_second_goal;
     wire route_lost_player=(route_players[0] && !p1_live) ||
                            (route_players[1] && !p2_live);
-    wire route_usable=field_reachable && (!USE_AWARENESS || next_behaviour!=IDLE);
+    wire guided_move=!USE_AWARENESS || next_behaviour!=IDLE || (USE_PATROL && next_patrol);
+    wire route_usable=field_reachable && guided_move;
     reg [7:0] peek_tile;
     wire step_diagonal=segment_origin[3:0]!=candidate[3:0] && segment_origin[7:4]!=candidate[7:4];
     wire [7:0] step_side1={segment_origin[7:4],candidate[3:0]};
@@ -299,8 +346,9 @@ module enemy_manager #(
         .goal2(USE_AWARENESS ? route_goal2 : player2_tile),
         .goal_active(USE_AWARENESS ? route_active : p1_live),
         .goal2_active(USE_AWARENESS ? route_active2 : p2_live),
+        .limit_range(USE_AWARENESS && route_limited),
         .read_reachable(field_reachable),.read_direction(field_direction),
-        .read_second_goal(field_second_goal));
+        .read_second_goal(field_second_goal),.read_in_field(field_in_range));
     wire can_step = (was_moving || candidate != old_tile) &&
                     (USE_AWARENESS || p1_live || p2_live) &&
                     (MOVE_SUBSTEPS>1 || !(p1_live && candidate==target_tile)) &&
@@ -311,6 +359,8 @@ module enemy_manager #(
                      !occupied[candidate] && !reserved[candidate] &&
                      (!step_diagonal || (!occupied[step_side1] && !reserved[step_side1] &&
                                          !occupied[step_side2] && !reserved[step_side2]))));
+    wire roam_tile_available=(p1_live || p2_live) &&
+        !(p1_live && candidate==player_tile) && !(p2_live && candidate==player2_tile);
 
     function [31:0] tile_center(input [3:0] tile_axis);
         tile_center = ({28'd0,tile_axis} << COORD_FRAC_BITS) + HALF_TILE;
@@ -354,6 +404,15 @@ module enemy_manager #(
         {pos_y[live_id][COORD_FRAC_BITS +: 4], pos_x[live_id][COORD_FRAC_BITS +: 4]};
     wire movement_enabled = playing && map_ready && !combat_locked && !spawn_busy && !spawn_req;
     wire finish_awareness = USE_AWARENESS && move_state==MOVE_NEXT;
+    wire start_sweep=move_state==MOVE_IDLE && move_tick && movement_enabled && !remove_enemy &&
+                     (USE_AWARENESS || field_ready);
+    if(USE_AWARENESS && USE_WANDER) begin : g_wander
+        lfsr16 random_direction(.clk(clk),.rst(rst),.load(clear || !map_ready),
+            .advance(start_sweep || move_state==MOVE_ROAM_PICK),
+            .seed(wander_seed),.value(wander_random));
+    end else begin : g_no_wander
+        assign wander_random=0;
+    end
     wire target_changed = !USE_AWARENESS &&
         (TWO_PLAYERS ? !field_ready : player_tile!=target_tile);
     if(USE_AWARENESS) begin : g_sight
@@ -366,6 +425,60 @@ module enemy_manager #(
     end else begin : g_no_sight
         assign sight_done=0;
         assign sight_visible=0;
+    end
+    if(USE_AWARENESS) begin : g_hearing
+        // Convert the accepted firing pose to the same south-facing grid
+        // used by combat, including shots exactly on a tile boundary.
+        function [7:0] firing_tile(input [31:0] x, y);
+            reg [3:0] row;
+            begin
+                row=4'd0-y[15:12]-{3'd0,|y[11:0]};
+                firing_tile={row,x[15:12]};
+            end
+        endfunction
+        function valid_pose(input [31:0] x, y);
+            valid_pose=x[31:16]==0 && y!=0 && y<=32'd65536;
+        endfunction
+        wire capture1=shot_accept1 && (!USE_CAMERA_RAY || valid_pose(camera_x,camera_y));
+        wire capture2=shot_accept2 && (!USE_CAMERA_RAY || valid_pose(camera2_x,camera2_y));
+        reg [7:0] pending_tile1, pending_tile2, sweep_tile1, sweep_tile2;
+        reg [MAX_ENEMIES-1:0] pending_mask1, pending_mask2, sweep_mask1, sweep_mask2;
+        assign sound_tile1=sweep_tile1;
+        assign sound_tile2=sweep_tile2;
+        assign sound1_for_slot=sweep_mask1[move_id];
+        assign sound2_for_slot=sweep_mask2[move_id];
+
+        // Keep the newest accepted shot per player until the next sweep.
+        // The batch is immutable during the sweep, even if another shot arrives.
+        always @(posedge clk) begin
+            if(!combat_enabled) begin
+                pending_mask1<=0; pending_mask2<=0; sweep_mask1<=0; sweep_mask2<=0;
+            end else begin
+                if(start_sweep) begin
+                    sweep_tile1<=pending_tile1; sweep_tile2<=pending_tile2;
+                    sweep_mask1<=pending_mask1; sweep_mask2<=pending_mask2;
+                    pending_mask1<=0; pending_mask2<=0;
+                end
+                if(capture1) begin
+                    pending_tile1<=USE_CAMERA_RAY ? firing_tile(camera_x,camera_y) : player_tile;
+                    pending_mask1<=active & ~attack_locked;
+                end
+                if(capture2) begin
+                    pending_tile2<=USE_CAMERA_RAY ? firing_tile(camera2_x,camera2_y) : player2_tile;
+                    pending_mask2<=active & ~attack_locked;
+                end
+                if(accept_spawn) begin
+                    // A fresh slot never hears shots accepted before its spawn.
+                    pending_mask1[free_id]<=0; pending_mask2[free_id]<=0;
+                    sweep_mask1[free_id]<=0; sweep_mask2[free_id]<=0;
+                end
+            end
+        end
+    end else begin : g_no_hearing
+        assign sound_tile1=0;
+        assign sound_tile2=0;
+        assign sound1_for_slot=0;
+        assign sound2_for_slot=0;
     end
     wire [7:0] next_tile = {next_y[COORD_FRAC_BITS +:4],next_x[COORD_FRAC_BITS +:4]};
     wire step_valid = (MOVE_SUBSTEPS==1 || !close_to_player) && !map_bits[next_tile] &&
@@ -572,9 +685,13 @@ module enemy_manager #(
     wire [255:0] next_reservation=(!arriving && MOVE_SUBSTEPS>1) ?
         current_segment_mask |
         (look_valid ? segment_mask(candidate,look_tile) : 256'd0) : 256'd0;
-    wire [255:0] removed_reservation=segment_mask(travel_origin[remove_id],travel_destination[remove_id]) |
-        (has_look_reservation[remove_id] ?
-         segment_mask(travel_destination[remove_id],look_reservation[remove_id]) : 256'd0);
+    wire removed_moving, removed_has_look;
+    wire [7:0] removed_origin, removed_destination, removed_look;
+    assign {removed_moving,removed_has_look,removed_origin,removed_destination,removed_look} =
+        lethal_hit ? damage_travel : {moving[live_id],has_look_reservation[live_id],
+            travel_origin[live_id],travel_destination[live_id],look_reservation[live_id]};
+    wire [255:0] removed_reservation=segment_mask(removed_origin,removed_destination) |
+        (removed_has_look ? segment_mask(removed_destination,removed_look) : 256'd0);
     // Read, perceive, plan and apply one slot at a time.
     always @(posedge clk) begin
         if(rst || clear || !playing || !map_ready) begin
@@ -589,9 +706,13 @@ module enemy_manager #(
             current_x<=0; current_y<=0; next_x<=0; next_y<=0;
             sight_tile1<=0; sight_tile2<=0; sight_live<=0; seen<=0; sight_player<=0;
             route_players<=0;
-            route_goal<=0; route_goal2<=0; route_active<=0; route_active2<=0;
+            route_goal<=0; route_goal2<=0; route_active<=0; route_active2<=0; route_limited<=0;
             first_is_p2<=0; awareness_pending<=0;
             next_behaviour<=IDLE; next_last_seen<=0; next_memory<=0; next_preferred<=0;
+            next_investigate_tile<=0; next_memory_is_sound<=0;
+            roam_probe<=0; roam_attempt<=0;
+            next_patrol<=0; next_patrol_second<=0; next_patrol_ticks<=0;
+            patrol_dist1<=0; patrol_dist2<=0;
         end else if(move_state!=MOVE_IDLE && target_changed) begin
             move_state<=MOVE_IDLE;
         end else if(move_state!=MOVE_IDLE && !finish_awareness &&
@@ -600,7 +721,7 @@ module enemy_manager #(
             move_state<=MOVE_READ;
         end else if(finish_awareness || (movement_enabled && !remove_enemy)) begin
             case(move_state)
-                MOVE_IDLE: if(move_tick && (USE_AWARENESS || field_ready)) begin
+                MOVE_IDLE: if(start_sweep) begin
                     move_id<=first_move_id; target_tile<=player_tile; move_state<=MOVE_READ;
                 end
                 MOVE_READ: if(active[move_id] && !attack_locked[move_id]) begin
@@ -614,6 +735,7 @@ module enemy_manager #(
                     old_look_base<=travel_destination[move_id];
                     old_look_valid<=has_look_reservation[move_id];
                     reversing<=0;
+                    roam_probe<=0;
                     if(moving[move_id]) begin
                         candidate<=travel_destination[move_id];
                         step_direction<=travel_direction[move_id];
@@ -642,7 +764,11 @@ module enemy_manager #(
                 end
                 MOVE_SIGHT_DECIDE: begin
                     next_last_seen<=last_seen[move_id];
+                    next_investigate_tile<=investigate_tile[move_id];
+                    next_memory_is_sound<=memory_is_sound[move_id];
                     next_preferred<=preferred_player[move_id];
+                    next_patrol<=0; next_patrol_second<=patrol_second[move_id];
+                    next_patrol_ticks<=wander_delay(move_id);
                     route_players<={sees_p2,sees_p1};
                     if(sees_p1 || sees_p2) begin
                         // Seed the preferred player first so equal-cost routes stay
@@ -650,21 +776,49 @@ module enemy_manager #(
                         route_goal<=prefer_p2 ? sight_tile2 : sight_tile1;
                         route_goal2<=prefer_p2 ? sight_tile1 : sight_tile2;
                         route_active<=1; route_active2<=sees_p1 && sees_p2;
+                        route_limited<=0;
                         first_is_p2<=prefer_p2;
                         next_behaviour<=CHASE;
                         next_memory<=MEMORY_TICKS;
+                        next_memory_is_sound<=0;
                         move_state<=MOVE_ROUTE_WAIT;
-                    end else if((p1_live || p2_live) && memory_left[move_id]>1) begin
-                        if(old_tile==last_seen[move_id] && !was_moving) begin
+                    end else if((p1_live || p2_live) && (sound1_for_slot || sound2_for_slot)) begin
+                        // A simultaneous pair uses the nearest reachable
+                        // source. Seed P1 first for deterministic ties.
+                        route_goal<=sound1_for_slot ? sound_tile1 : sound_tile2;
+                        route_goal2<=sound_tile2;
+                        route_active<=1; route_active2<=sound1_for_slot && sound2_for_slot;
+                        route_limited<=1;
+                        move_state<=MOVE_HEAR_WAIT;
+                    end else move_state<=MOVE_MEMORY;
+                end
+                MOVE_HEAR_WAIT: if(field_ready) move_state<=MOVE_HEAR_DECIDE;
+                MOVE_HEAR_DECIDE: if(field_in_range && (p1_live || p2_live)) begin
+                    next_investigate_tile<=heard_tile;
+                    next_memory_is_sound<=1;
+                    if(old_tile==heard_tile && !was_moving) begin
+                        next_behaviour<=SEARCH;
+                        next_memory<=SEARCH_TICKS;
+                        move_state<=MOVE_NEXT;
+                    end else begin
+                        next_behaviour<=FOLLOW_MEMORY;
+                        next_memory<=MEMORY_TICKS;
+                        move_state<=MOVE_PLAN;
+                    end
+                end else move_state<=MOVE_MEMORY;
+                MOVE_MEMORY: begin
+                    if((p1_live || p2_live) && memory_left[move_id]>1) begin
+                        if(old_tile==remembered_tile && !was_moving) begin
                             // Remain here and scan again each tick during the search.
                             next_behaviour<=SEARCH;
                             next_memory<=memory_left[move_id]>SEARCH_TICKS ?
                                 SEARCH_TICKS : memory_left[move_id]-1'b1;
                             move_state<=MOVE_NEXT;
                         end else begin
-                            route_goal<=last_seen[move_id];
+                            route_goal<=remembered_tile;
                             route_active<=1; route_active2<=0;
-                            next_behaviour<=LAST_SEEN;
+                            route_limited<=0;
+                            next_behaviour<=FOLLOW_MEMORY;
                             next_memory<=memory_left[move_id]-1'b1;
                             move_state<=MOVE_ROUTE_WAIT;
                         end
@@ -672,16 +826,62 @@ module enemy_manager #(
                         next_behaviour<=IDLE;
                         next_memory<=0;
                         next_preferred<=0;
-                        // Settle the owned segment and release its reservation.
-                        // MOVE_PLAN ignores the cached field for this idle slot.
-                        move_state<=was_moving ? MOVE_PLAN : MOVE_NEXT;
+                        next_memory_is_sound<=0;
+                        if(USE_PATROL && USE_WANDER && (p1_live || p2_live)) begin
+                            if(patrolling[move_id] && patrol_ticks[move_id]!=0 &&
+                               (old_tile!=current_patrol_goal || was_moving)) begin
+                                route_goal<=current_patrol_goal;
+                                route_active<=1; route_active2<=0; route_limited<=0;
+                                next_patrol<=1;
+                                next_patrol_ticks<=patrol_ticks[move_id]-1'b1;
+                                move_state<=MOVE_ROUTE_WAIT;
+                            end else if(!patrolling[move_id] && patrol_ticks[move_id]<=1) begin
+                                move_state<=MOVE_PATROL_SCORE;
+                            end else begin
+                                if(!patrolling[move_id]) next_patrol_ticks<=patrol_ticks[move_id]-1'b1;
+                                move_state<=MOVE_WANDER;
+                            end
+                        end else move_state<=MOVE_WANDER;
                     end
+                end
+                MOVE_PATROL_SCORE: begin
+                    patrol_dist1<=tile_distance(old_tile,patrol_tile1);
+                    patrol_dist2<=tile_distance(old_tile,patrol_tile2);
+                    move_state<=MOVE_PATROL_GOAL;
+                end
+                MOVE_PATROL_GOAL: if(patrol_dist1!=0 || patrol_dist2!=0) begin
+                    route_goal<=pick_patrol2 ? patrol_tile2 : patrol_tile1;
+                    route_active<=1; route_active2<=0; route_limited<=0;
+                    next_patrol<=1; next_patrol_second<=pick_patrol2;
+                    next_patrol_ticks<=PATROL_STALL_TICKS;
+                    move_state<=MOVE_ROUTE_WAIT;
+                end else move_state<=MOVE_WANDER;
+                MOVE_WANDER: if(USE_WANDER && (p1_live || p2_live) && !was_moving) begin
+                    // Try each cardinal neighbor once using the normal reservations.
+                    step_direction<={1'b0,wander_random[1:0]};
+                    roam_attempt<=0;
+                    roam_probe<=1;
+                    move_state<=MOVE_ROAM_PICK;
+                end else if(USE_WANDER && (p1_live || p2_live) && behaviour[move_id]==IDLE &&
+                            !(USE_PATROL && patrolling[move_id])) begin
+                    move_state<=MOVE_CHECK;
+                end else begin
+                    // Settle an owned segment when ending guided motion.
+                    move_state<=was_moving ? MOVE_PLAN : MOVE_NEXT;
+                end
+                MOVE_ROAM_PICK: begin
+                    candidate<=neighbor_tile(old_tile,step_direction);
+                    move_state<=MOVE_CHECK;
                 end
                 MOVE_ROUTE_WAIT: if(route_lost_player) move_state<=MOVE_READ;
                                  else if(field_ready) move_state<=MOVE_LOOKUP;
                 MOVE_LOOKUP: move_state<=MOVE_PLAN;
                 MOVE_PLAN: if(USE_AWARENESS && route_lost_player) begin
                     move_state<=MOVE_READ;
+                end else if(USE_PATROL && next_patrol && (!field_in_range || !(p1_live || p2_live))) begin
+                    next_patrol<=0;
+                    next_patrol_ticks<=wander_delay(move_id);
+                    move_state<=MOVE_WANDER;
                 end else begin
                     if(USE_AWARENESS && next_behaviour==CHASE) begin
                         next_preferred<=follow_p2;
@@ -709,15 +909,23 @@ module enemy_manager #(
                         move_state<=MOVE_CHECK;
                     end else move_state<=MOVE_NEXT;
                 end
-                MOVE_CHECK: move_state<=can_step ? MOVE_LOOK : MOVE_NEXT;
+                MOVE_CHECK: begin
+                    if(can_step && (!roam_probe || roam_tile_available)) begin
+                        // Idle segments end at the tile centre and have no lookahead.
+                        move_state<=USE_WANDER && !guided_move ? MOVE_CONTACT : MOVE_LOOK;
+                    end else if(roam_probe && roam_attempt!=2'd3) begin
+                        step_direction<={1'b0,step_direction[1:0]+2'd1};
+                        roam_attempt<=roam_attempt+2'd1;
+                        move_state<=MOVE_ROAM_PICK;
+                    end else move_state<=MOVE_NEXT;
+                end
                 MOVE_LOOK: move_state<=MOVE_LOOK_WAIT;
                 MOVE_LOOK_WAIT: begin
                     peek_tile<=neighbor_tile(candidate,field_direction);
                     move_state<=MOVE_CONTACT;
                 end
                 MOVE_CONTACT: begin
-                    look_valid<=peek_available && MOVE_SUBSTEPS>1 && !reversing &&
-                                (!USE_AWARENESS || next_behaviour!=IDLE);
+                    look_valid<=peek_available && MOVE_SUBSTEPS>1 && !reversing && guided_move;
                     look_direction<=field_direction; look_tile<=peek_tile;
                     gap_x1<=current_x>target_x1 ? current_x-target_x1 : target_x1-current_x;
                     gap_y1<=current_y>target_y1 ? current_y-target_y1 : target_y1-current_y;
@@ -783,7 +991,10 @@ module enemy_manager #(
                     move_state<=MOVE_VALIDATE;
                 end
                 MOVE_VALIDATE: move_state<=step_valid ? MOVE_APPLY : MOVE_NEXT;
-                MOVE_APPLY: move_state<=MOVE_NEXT;
+                MOVE_APPLY: begin
+                    if(USE_PATROL && next_patrol && tile_changed) next_patrol_ticks<=PATROL_STALL_TICKS;
+                    move_state<=MOVE_NEXT;
+                end
                 MOVE_NEXT: if(next_move_id==first_move_id) begin
                     // A full sweep is done. Rotate priority for the next tick.
                     first_move_id<=(first_move_id==MAX_ENEMIES-1) ?
@@ -802,7 +1013,10 @@ module enemy_manager #(
                 pos_x[reset_i]<=0; pos_y[reset_i]<=0; hp[reset_i]<=0;
                 kind[reset_i]<=0; behaviour[reset_i]<=IDLE; cooldown[reset_i]<=0;
                 last_seen[reset_i]<=0; memory_left[reset_i]<=0;
+                investigate_tile[reset_i]<=0; memory_is_sound[reset_i]<=0;
                 preferred_player[reset_i]<=0;
+                patrolling[reset_i]<=0; patrol_second[reset_i]<=0;
+                patrol_ticks[reset_i]<=wander_delay(reset_i);
                 look_reservation[reset_i]<=0;
                 travel_origin[reset_i]<=0; travel_destination[reset_i]<=0;
                 travel_direction[reset_i]<=0;
@@ -812,7 +1026,7 @@ module enemy_manager #(
             // Spawns see new reservations immediately; death/arrival releases all
             // endpoint/side/lookahead cells without a delayed rebuild window.
             if(apply_move) reserved<=(reserved & ~previous_reservation) | next_reservation;
-            else if(remove_enemy && moving[remove_id]) reserved<=reserved & ~removed_reservation;
+            else if(remove_enemy && removed_moving) reserved<=reserved & ~removed_reservation;
             // Share two mask writes across movement, spawning and removal.
             if(accept_spawn || (apply_move && tile_changed)) occupied[set_tile]<=1;
             if(remove_enemy || (apply_move && tile_changed)) occupied[clear_tile]<=0;
@@ -827,7 +1041,10 @@ module enemy_manager #(
                 moving[free_id]<=0;
                 behaviour[free_id]<=IDLE; cooldown[free_id]<=0;
                 last_seen[free_id]<=0; memory_left[free_id]<=0;
+                investigate_tile[free_id]<=0; memory_is_sound[free_id]<=0;
                 preferred_player[free_id]<=0;
+                patrolling[free_id]<=0; patrol_second[free_id]<=0;
+                patrol_ticks[free_id]<=wander_delay(free_id);
                 spawn_ack<=1; request_seen<=1;
             end
             // Free/live selectors use pre-edge state, so simultaneous updates
@@ -838,7 +1055,10 @@ module enemy_manager #(
                 moving[remove_id]<=0;
                 behaviour[remove_id]<=IDLE; cooldown[remove_id]<=0;
                 last_seen[remove_id]<=0; memory_left[remove_id]<=0;
+                investigate_tile[remove_id]<=0; memory_is_sound[remove_id]<=0;
                 preferred_player[remove_id]<=0;
+                patrolling[remove_id]<=0; patrol_second[remove_id]<=0;
+                patrol_ticks[remove_id]<=wander_delay(remove_id);
                 enemy_defeated<=1;
             end else if(shot_hit) hp[damage_id]<=hp[damage_id]-8'd1;
             // A movement step has already committed by MOVE_NEXT. Finish the
@@ -847,8 +1067,12 @@ module enemy_manager #(
                (!remove_enemy || remove_id!=move_id)) begin
                 behaviour[move_id]<=next_behaviour;
                 last_seen[move_id]<=next_last_seen;
+                investigate_tile[move_id]<=next_investigate_tile;
+                memory_is_sound[move_id]<=next_memory_is_sound;
                 memory_left[move_id]<=next_memory;
                 preferred_player[move_id]<=next_preferred;
+                patrolling[move_id]<=next_patrol; patrol_second[move_id]<=next_patrol_second;
+                patrol_ticks[move_id]<=next_patrol_ticks;
             end
             if(apply_move) begin
                 has_look_reservation[move_id]<=look_valid && !arriving;

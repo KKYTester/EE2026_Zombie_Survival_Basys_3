@@ -1,5 +1,5 @@
 param([string]$VivadoBin = 'C:\AMDDesignTools\2025.2\Vivado\bin',
-    [string[]]$Tests = @('tb_enemy_manager', 'tb_enemy_waves', 'tb_zombie_renderer', 'tb_enemy_two_players', 'tb_camera_enemy', 'tb_enemy_smooth', 'tb_enemy_circles', 'tb_enemy_lookahead', 'tb_flow_diagonal', 'tb_enemy_diagonal', 'tb_enemy_precision', 'tb_enemy_diagonal_contact', 'tb_zombie_effects', 'tb_enemy_windup', 'tb_ally_sprite', 'tb_enemy_awareness'))
+    [string[]]$Tests = @('tb_enemy_manager', 'tb_enemy_waves', 'tb_zombie_renderer', 'tb_enemy_two_players', 'tb_camera_enemy', 'tb_enemy_smooth', 'tb_enemy_circles', 'tb_enemy_lookahead', 'tb_flow_diagonal', 'tb_enemy_diagonal', 'tb_enemy_precision', 'tb_enemy_diagonal_contact', 'tb_zombie_effects', 'tb_enemy_windup', 'tb_ally_sprite', 'tb_enemy_awareness', 'tb_enemy_hearing', 'tb_enemy_wander', 'tb_enemy_patrol'))
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $runDir = Join-Path $repoRoot 'build/enemy_sim'
@@ -22,7 +22,8 @@ try {
         "$PSScriptRoot/tb_enemy_smooth.v" "$PSScriptRoot/tb_enemy_circles.v" "$PSScriptRoot/tb_enemy_lookahead.v" `
         "$PSScriptRoot/tb_flow_diagonal.v" "$PSScriptRoot/tb_enemy_diagonal.v" "$PSScriptRoot/tb_enemy_precision.v" `
         "$PSScriptRoot/tb_enemy_diagonal_contact.v" "$PSScriptRoot/tb_zombie_effects.v" `
-        "$PSScriptRoot/tb_enemy_windup.v" "$PSScriptRoot/tb_ally_sprite.v" "$PSScriptRoot/tb_enemy_awareness.v"
+        "$PSScriptRoot/tb_enemy_windup.v" "$PSScriptRoot/tb_ally_sprite.v" "$PSScriptRoot/tb_enemy_awareness.v" `
+        "$PSScriptRoot/tb_enemy_hearing.v" "$PSScriptRoot/tb_enemy_wander.v" "$PSScriptRoot/tb_enemy_patrol.v"
     if ($LASTEXITCODE -ne 0) { throw 'Verilog compilation failed' }
     foreach ($testTop in $Tests) {
         & "$VivadoBin/xelab.bat" $testTop -s $testTop

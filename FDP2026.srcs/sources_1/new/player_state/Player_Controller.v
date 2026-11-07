@@ -18,7 +18,7 @@ module Player_Controller #(
     // Mouse_Control_Delta outputs share this 100 MHz clock; valid on mouse_event.
     input wire signed [8:0] mouse_x_delta,
     input wire mouse_event,
-    output wire [31:0] x_coord, y_coord, theta
+    output reg [31:0] x_coord = 32'd0, y_coord = 32'd0, theta = 32'd0
 );
     wire forward_down, back_down, left_down, right_down;
     Button_Debounce #(.STABLE_CYCLES(DEBOUNCE_CYCLES)) forward_button
@@ -79,43 +79,41 @@ module Player_Controller #(
     wire [255:0] active_map = USE_RUNTIME_MAP ? map_bits : MAP;
     function cell_open;
         input signed [17:0] x, y;
+        input [255:0] walls;
         begin
             if (x < 0 || y < 0 || x >= 18'sd65536 || y >= 18'sd65536)
                 cell_open = 0;
-            else cell_open = !active_map[{y[15:12],x[15:12]}];
+            else cell_open = !walls[{y[15:12],x[15:12]}];
         end
     endfunction
     function body_open;
         input signed [17:0] x, y;
+        input [255:0] walls;
         begin
-            body_open = cell_open(x - `GAME_PLAYER_RADIUS, y - `GAME_PLAYER_RADIUS) &&
-                        cell_open(x + `GAME_PLAYER_RADIUS, y - `GAME_PLAYER_RADIUS) &&
-                        cell_open(x - `GAME_PLAYER_RADIUS, y + `GAME_PLAYER_RADIUS) &&
-                        cell_open(x + `GAME_PLAYER_RADIUS, y + `GAME_PLAYER_RADIUS);
+            body_open = cell_open(x - `GAME_PLAYER_RADIUS, y - `GAME_PLAYER_RADIUS, walls) &&
+                        cell_open(x + `GAME_PLAYER_RADIUS, y - `GAME_PLAYER_RADIUS, walls) &&
+                        cell_open(x - `GAME_PLAYER_RADIUS, y + `GAME_PLAYER_RADIUS, walls) &&
+                        cell_open(x + `GAME_PLAYER_RADIUS, y + `GAME_PLAYER_RADIUS, walls);
         end
     endfunction
 
     localparam [2:0] IDLE=0, VECTOR=1, POSITION=2, CHECK_X=3, CHECK_Y=4, COMMIT=5;
     reg [2:0] state;
     reg signed [17:0] candidate_x, candidate_y, accepted_x;
-    reg [31:0] dx, dy;
+    reg x_clear, y_clear;
+    wire candidate_x_open = body_open(candidate_x, $signed(y_coord[17:0]), active_map);
     reg [9:0] update_angle;
-    wire [9:0] angle_delta = update_angle - theta[9:0];
-    Player #(.START_X(START_X), .START_Y(START_Y), .START_ANGLE(START_ANGLE),
-        .USE_RUNTIME_SPAWN(USE_RUNTIME_MAP)) player (
-        .clk(clk), .reset(reset), .game_tick(state == COMMIT),
-        .spawn_x(spawn_x), .spawn_y(spawn_y),
-        .dx(dx), .dy(dy), .omega({22'd0,angle_delta}),
-        .x_coord(x_coord), .y_coord(y_coord), .theta(theta)
-    );
     always @(posedge clk) begin
         if (reset) begin
+            x_coord <= USE_RUNTIME_MAP ? spawn_x : START_X;
+            y_coord <= USE_RUNTIME_MAP ? spawn_y : START_Y;
+            theta <= {22'd0, START_ANGLE[9:0]};
             state <= IDLE;
             candidate_x <= 0;
             candidate_y <= 0;
             accepted_x <= 0;
-            dx <= 0;
-            dy <= 0;
+            x_clear <= 0;
+            y_clear <= 0;
             saved_sin <= 0;
             saved_cos <= 0;
             step_x <= 0;
@@ -148,22 +146,22 @@ module Player_Controller #(
                     state <= CHECK_X;
                 end
                 CHECK_X: begin
-                    if (body_open(candidate_x, $signed(y_coord[17:0]))) begin
-                        accepted_x <= candidate_x;
-                        dx <= {{14{candidate_x[17]}},candidate_x} - x_coord;
-                    end else begin
-                        accepted_x <= x_coord[17:0];
-                        dx <= 0;
-                    end
+                    x_clear <= candidate_x_open;
+                    accepted_x <= candidate_x_open ? candidate_x : x_coord[17:0];
                     state <= CHECK_Y;
                 end
                 CHECK_Y: begin
-                    if (body_open(accepted_x, candidate_y))
-                        dy <= {{14{candidate_y[17]}},candidate_y} - y_coord;
-                    else dy <= 0;
+                    y_clear <= body_open(accepted_x, candidate_y, active_map);
                     state <= COMMIT;
                 end
-                COMMIT: state <= IDLE;
+                COMMIT: begin
+                    // Commit the checked coordinates directly. Collision checks
+                    // only need to decide which axes may update.
+                    if (x_clear) x_coord <= {{14{accepted_x[17]}},accepted_x};
+                    if (y_clear) y_coord <= {{14{candidate_y[17]}},candidate_y};
+                    theta <= {22'd0, update_angle};
+                    state <= IDLE;
+                end
                 default: state <= IDLE;
             endcase
         end

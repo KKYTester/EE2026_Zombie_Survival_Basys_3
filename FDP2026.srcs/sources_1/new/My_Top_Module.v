@@ -381,10 +381,12 @@ module My_Top_Module #(
     end
     // Zombies (1 PLAYER, or the leader of a shared run): Player 2 is the follower.
     enemy_manager #(.USE_CAMERA_RAY(1),.USE_PLAYER_POSITIONS(1),.TWO_PLAYERS(1),.USE_AWARENESS(1),
+        .USE_WANDER(1),.USE_PATROL(1),
         .ATTACK_WINDUP_CYCLES(ZOMBIE_WINDUP_CYCLES),
         .ATTACK_RECOVERY_CYCLES(ZOMBIE_RECOVERY_CYCLES)) enemies(
         .clk(clk),.rst(reset),.clear(enemy_clear_q),.playing(enemy_run_q),
-        .map_ready(map_valid_delayed),.map_bits(published_map),
+        .map_ready(map_valid_delayed),.map_bits(published_map),.wander_seed(active_seed),
+        .patrol_tile1(p1_addr),.patrol_tile2(p2_addr),
         .spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_ack(spawn_ack),
         .spawn_busy(spawn_busy),.enemy_defeated(enemy_defeated),.occupied(occupied),
         .debug_defeat(test_kill),.move_tick(move_tick),.player_tile(player_tile),

@@ -147,9 +147,22 @@ damage cooldown. Enemies update 32 times per second and rotate slot priority.
 Each zombie checks sight in all directions using tile centres, up to six
 tiles along either axis. Walls block sight, including either side of an exact
 corner crossing. If sight is lost, the zombie follows its last seen tile and
-scans from there for about 0.75 seconds. Idle zombies stand still and keep
-scanning. A zombie gives up if it cannot reach the tile before its memory
-expires, about eight seconds after losing sight.
+scans from there for about 0.75 seconds. Idle zombies wander one tile at a
+time while scanning. They use the map seed to pick among the four cardinal
+directions and try other neighbors if the first choice is blocked.
+After roughly two to three seconds of wandering, a zombie follows a route
+toward the farther of the map's two spawn tiles. It resumes wandering after
+arrival or two seconds without crossing into a new tile. Sight and hearing
+can interrupt the patrol. A zombie gives up on a last-seen tile if it cannot
+reach it before its memory expires, about eight seconds after losing sight.
+
+When a zombie sees neither player, it can hear an accepted shot up to six
+walkable steps away. Sound goes around corners through open paths. Walls and
+blocked diagonals stop it. The zombie heads to the original firing
+tile, then scans there just as it does at a last-seen tile. A visible player
+takes priority. Between sweeps, the latest shot from each player is kept.
+If both are audible in the same sweep, the shorter path wins and equal paths
+favor P1. A new audible shot can redirect an investigation.
 
 The zombies share a BFS engine that searches all eight neighbors with equal
 hop cost. Diagonals require
@@ -166,7 +179,8 @@ sqrt(2), so straight diagonal travel has approximately the same speed as
 cardinal travel. Its next tile is reserved before steering begins,
 and every proposed substep must remain on the current segment's floor tiles.
 Steering arithmetic is pipelined. An eight-slot sweep can rebuild the field
-for each slot, using roughly 0.35 ms for those rebuilds at 100 MHz.
+twice per slot when a hearing check falls back to a remembered destination.
+Those rebuilds take at most about 0.7 ms at 100 MHz.
 A blended waypoint completes within one substep of its endpoint
 plane, retaining lateral motion. The proportional steering can slow movement
 at corners; Q8 substep rounding also slightly reduces diagonal speed. Sprites and minimap
