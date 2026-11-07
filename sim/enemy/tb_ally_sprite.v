@@ -12,11 +12,12 @@ module tb_ally_sprite;
     zombie_renderer #(.USE_CAMERA_POSE(1),.FOCAL_X(83),.FOCAL_Y(64),.SLOTS(9),.HAS_ALLY(1)) dut(
         .clk(clk),.reset(reset),.prepare(prepare),.display_bank(bank),.scene_valid(scene_valid),
         .camera_x(12'h180),.camera_y(12'h180),.facing(2'd0),.camera_angle(10'd0),
-        .active(active),.zombie_x(zx),.zombie_y(zy),.pixel_x(px),.pixel_y(py),
+        .active(active),.zombie_x(zx),.zombie_y(zy),
+        .hp({18{1'b1}}),.dying(9'd0),.fall(36'd0),.pixel_x(px),.pixel_y(py),
         .wall_depth(13'd4096),.background(16'h0000),.done(done),.pixel(pixel));
     integer errors=0;
     task sample(input [6:0] x, input [5:0] y, output [15:0] c); begin
-        px=x; py=y; repeat(60) @(posedge clk); c=pixel;
+        px=x; py=y; repeat(70) @(posedge clk); c=pixel;   // 9 slots x 6 clocks + margin
     end endtask
     reg [15:0] c;
     integer x, ally_px, zombie_px;

@@ -2,6 +2,11 @@
 // Prepare SLOTS billboards in the back bank, then composite pixels serially.
 // With HAS_ALLY=1 the last slot is drawn as a human (the other player) in
 // skin/blue colours instead of a zombie.
+// Damage and death (display only):
+//  - hp (0..3 per slot): a 3-segment health bar above a damaged zombie
+//    (hp 1 or 2); full-health zombies show no bar.
+//  - dying + fall (0..15): a killed zombie is drawn tinted red and rotated
+//    about its feet by fall*6 degrees, so it tips over sideways onto the floor.
 module zombie_renderer #(
     parameter USE_CAMERA_POSE=0,
     parameter integer FOCAL_X=64,
@@ -15,6 +20,9 @@ module zombie_renderer #(
     input wire [9:0] camera_angle,
     input wire [SLOTS-1:0] active,
     input wire [12*SLOTS-1:0] zombie_x, zombie_y, // Packed Q8 tile coordinates, x right, y down.
+    input wire [2*SLOTS-1:0] hp,          // hit points per slot (3 = full, no bar)
+    input wire [SLOTS-1:0] dying,         // slot shows a falling corpse
+    input wire [4*SLOTS-1:0] fall,        // fall step, 0 upright .. 15 flat
     input wire [6:0] pixel_x,
     input wire [5:0] pixel_y,
     input wire [12:0] wall_depth,         // Forward Q8 depth; 4096 means no wall.
@@ -33,6 +41,9 @@ module zombie_renderer #(
     reg [1:0] direction;
     reg [SLOTS-1:0] snapshot_active;
     reg [12*SLOTS-1:0] snapshot_x, snapshot_y;
+    reg [2*SLOTS-1:0] snapshot_hp;
+    reg [SLOTS-1:0] snapshot_dying;
+    reg [4*SLOTS-1:0] snapshot_fall;
     reg signed [12:0] dx, dy;
     reg signed [13:0] forward, side;
     reg signed [15:0] scale, vertical_scale;
@@ -59,6 +70,9 @@ module zombie_renderer #(
     reg [12:0] depths [0:ENTRIES-1];
     reg signed [15:0] centers [0:ENTRIES-1];
     reg [7:0] heights [0:ENTRIES-1];
+    reg [1:0] hps [0:ENTRIES-1];
+    reg [ENTRIES-1:0] dyings;
+    reg [3:0] falls [0:ENTRIES-1];
     wire [SB:0] write_slot = {write_bank,slot};
 
     always @(posedge clk) begin
@@ -66,6 +80,7 @@ module zombie_renderer #(
         else case(project_state)
             P_IDLE: if(prepare) begin
                 snapshot_active<=active; snapshot_x<=zombie_x; snapshot_y<=zombie_y;
+                snapshot_hp<=hp; snapshot_dying<=dying; snapshot_fall<=fall;
                 origin_x<=camera_x; origin_y<=camera_y; direction<=facing;
                 sine<=sine_step(camera_angle);
                 cosine<=sine_step(camera_angle+10'd256);
@@ -105,6 +120,9 @@ module zombie_renderer #(
                 centers[write_slot]<=center;
                 heights[write_slot]<=height;
                 depths[write_slot]<=forward;
+                hps[write_slot]<=snapshot_hp[2*slot +: 2];
+                dyings[write_slot]<=snapshot_dying[slot];
+                falls[write_slot]<=snapshot_fall[4*slot +: 4];
                 if(slot==SLOTS-1) begin done<=1; project_state<=P_IDLE; end
                 else begin slot<=slot+1'b1; project_state<=P_READ; end
             end
@@ -112,7 +130,17 @@ module zombie_renderer #(
         endcase
     end
 
-    localparam [2:0] PIX_IDLE=0, PIX_READ=1, PIX_OFFSET=2, PIX_SHAPE=3, PIX_DRAW=4;
+    localparam [2:0] PIX_IDLE=0, PIX_READ=1, PIX_OFFSET=2, PIX_ROT=5, PIX_SUM=6, PIX_SHAPE=3, PIX_DRAW=4;
+    // sin(step*6 degrees) * 128 for the fall rotation (step 15 = 90 degrees).
+    function signed [8:0] fall_sin;
+        input [3:0] step;
+        case(step)
+            4'd0: fall_sin=0;    4'd1: fall_sin=13;   4'd2: fall_sin=27;   4'd3: fall_sin=40;
+            4'd4: fall_sin=52;   4'd5: fall_sin=64;   4'd6: fall_sin=75;   4'd7: fall_sin=86;
+            4'd8: fall_sin=95;   4'd9: fall_sin=104;  4'd10: fall_sin=111; 4'd11: fall_sin=117;
+            4'd12: fall_sin=122; 4'd13: fall_sin=125; 4'd14: fall_sin=127; default: fall_sin=128;
+        endcase
+    endfunction
     reg [2:0] pixel_state;
     reg [6:0] req_x;
     reg [5:0] req_y;
@@ -124,38 +152,71 @@ module zombie_renderer #(
     reg [7:0] candidate_height;
     reg [15:0] best_color;
     wire [SB:0] read_slot = {req_bank,scan};
-    reg candidate_ally;
+    reg candidate_ally, candidate_dying;
+    reg [1:0] candidate_hp;
+    reg [3:0] candidate_fall;
     reg signed [16:0] local_x;
-    wire [16:0] abs_x = local_x<0 ? -local_x : local_x;
+    // Unrotated position inside the sprite (row 0 = top of the head).
     wire signed [9:0] local_y = $signed({4'd0,req_y})-10'sd32+
                                $signed({3'd0,candidate_height[7:1]});
+    // Death fall: rotate the screen offset back into the upright sprite,
+    // pivoting on the feet (up = height above the feet row).
+    reg signed [8:0] f_sin, f_cos;
+    // As it tips over, lift the body by half its thickness so it lands on
+    // the floor instead of half below it.
+    reg [7:0] lift;
+    // Pipelined for timing: OFFSET registers the height above the feet
+    // (up_base), ROT registers the four products, SUM adds them.
+    reg signed [10:0] up_base;
+    wire signed [10:0] up = up_base - $signed({3'd0,lift});
+    wire signed [12:0] lx_c = local_x[12:0];
+    reg signed [21:0] p_xc, p_us, p_xs, p_uc;   // lx*cos, up*sin, lx*sin, up*cos
+    wire signed [22:0] rot_x_full = p_xc - p_us;
+    wire signed [22:0] rot_up_full = p_xs + p_uc;
+    reg signed [16:0] shape_x;   // sprite-space column offset (rotated when dying)
+    reg signed [9:0] shape_y;    // sprite-space row (rotated when dying)
+    wire [16:0] abs_x = shape_x<0 ? -shape_x : shape_x;
     wire [7:0] half_width = candidate_height>>2;
     wire [7:0] head_height = candidate_height>>2;
     wire [7:0] legs_start = candidate_height-(candidate_height>>2);
     wire [7:0] head_width = half_width-(half_width>>2);
     reg opaque;
     reg [15:0] sprite_color;
+    // Health bar: 9 pixels wide (3 per hit point), 2 rows, one row above the head.
+    wire show_bar = !candidate_ally && !candidate_dying && candidate_hp!=2'd0 && candidate_hp!=2'd3;
+    wire bar_row = shape_y==-10'sd3 || shape_y==-10'sd2;
+    wire bar_col = shape_x>=-17'sd4 && shape_x<=17'sd4;
+    wire [1:0] bar_segment = shape_x<-17'sd1 ? 2'd1 : shape_x<=17'sd1 ? 2'd2 : 2'd3;
+    reg [15:0] body_color;
     always @* begin
-        opaque=0; sprite_color=0;
-        if(local_y>=0 && local_y<$signed({2'd0,candidate_height}) && abs_x<half_width) begin
-            if(local_y<$signed({2'd0,head_height})) begin
+        opaque=0; body_color=0;
+        if(shape_y>=0 && shape_y<$signed({2'd0,candidate_height}) && abs_x<half_width) begin
+            if(shape_y<$signed({2'd0,head_height})) begin
                 opaque=abs_x<head_width;
                 // Zombie: green head, yellow eyes. Player: skin head, dark eyes.
-                sprite_color=(local_y== $signed({3'd0,head_height[7:1]}) && abs_x!=0)
+                body_color=(shape_y== $signed({3'd0,head_height[7:1]}) && abs_x!=0)
                              ? (candidate_ally ? 16'h2104 : 16'hffe0)
                              : (candidate_ally ? 16'hEDB0 : 16'h57c5);
-            end else if(local_y<$signed({2'd0,legs_start})) begin
-                opaque=1; sprite_color=candidate_ally ? 16'h1A9F : 16'h8816;  // blue / purple
+            end else if(shape_y<$signed({2'd0,legs_start})) begin
+                opaque=1; body_color=candidate_ally ? 16'h1A9F : 16'h8816;  // blue / purple
             end else begin
-                opaque=abs_x>=(half_width>>2); sprite_color=candidate_ally ? 16'h4208 : 16'h294a;
+                opaque=abs_x>=(half_width>>2); body_color=candidate_ally ? 16'h4208 : 16'h294a;
             end
+        end
+        sprite_color=body_color;
+        // Dying: Minecraft-style red tint (full red, green and blue darkened).
+        if(candidate_dying) sprite_color={5'h1F, 1'b0, body_color[10:6], 1'b0, body_color[4:1]};
+        if(show_bar && bar_row && bar_col) begin
+            opaque=1;
+            sprite_color=(bar_segment<=candidate_hp) ? 16'h07E0 : 16'h8000;  // green / dark red
         end
     end
     wire covers_pixel = candidate_valid && opaque && candidate_depth<best_depth;
     reg draw_candidate;
     reg [15:0] draw_color;
 
-    // The OLED holds each request long enough to scan all slots (4 clocks each).
+    // The OLED holds each request long enough to scan all slots (6 clocks each;
+    // 9 slots = 54 clocks, well inside one OLED pixel of 256 clocks).
     always @(posedge clk) begin
         if(reset) begin pixel_state<=PIX_IDLE; req_valid<=0; pixel<=0; end
         else if(!req_valid || req_x!=pixel_x || req_y!=pixel_y ||
@@ -170,10 +231,30 @@ module zombie_renderer #(
                 candidate_valid<=valid[read_slot]; candidate_depth<=depths[read_slot];
                 candidate_center<=centers[read_slot]; candidate_height<=heights[read_slot];
                 candidate_ally<=HAS_ALLY && scan==SLOTS-1;
+                candidate_hp<=hps[read_slot]; candidate_dying<=dyings[read_slot];
+                candidate_fall<=falls[read_slot];
                 pixel_state<=PIX_OFFSET;
             end
             PIX_OFFSET: begin
                 local_x<=$signed({10'd0,req_x})-candidate_center;
+                f_sin<=fall_sin(candidate_fall);
+                f_cos<=fall_sin(4'd15-candidate_fall);
+                lift<=(candidate_height[7:2]*fall_sin(candidate_fall))>>7;  // half_width*sin
+                up_base<=$signed({3'd0,candidate_height}) - 11'sd1 - $signed({local_y[9],local_y});
+                pixel_state<=PIX_ROT;
+            end
+            PIX_ROT: begin
+                p_xc<=lx_c*f_cos; p_us<=up*f_sin;
+                p_xs<=lx_c*f_sin; p_uc<=up*f_cos;
+                pixel_state<=PIX_SUM;
+            end
+            PIX_SUM: begin
+                if(candidate_dying) begin
+                    shape_x<=rot_x_full>>>7;
+                    shape_y<=$signed({1'b0,candidate_height}) - 10'sd1 - (rot_up_full>>>7);
+                end else begin
+                    shape_x<=local_x; shape_y<=local_y;
+                end
                 pixel_state<=PIX_SHAPE;
             end
             PIX_SHAPE: begin

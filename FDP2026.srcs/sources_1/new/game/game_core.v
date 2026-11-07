@@ -24,7 +24,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     parameter SPAWN_SHIFT=26, parameter CLEAR_SHIFT=27,
     parameter FLASH_SHIFT=22, parameter RECOIL_SHIFT=23, parameter RELOAD_SHIFT=25,
     parameter WIN_WAVE=10, parameter USE_SPAWN_OCCUPANCY=0, parameter FRACTIONAL_ENEMIES=0,
-    parameter USE_SHOT_BACKPRESSURE=0)(
+    parameter USE_SHOT_BACKPRESSURE=0,
+    parameter HIT_SHIFT=24)(                      // red crosshair for 2^24 clocks (~0.17 s)
     input wire clk, input wire rst,
     // Board
     input wire btn_c,                             // raw button, debounced here
@@ -60,6 +61,10 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     input wire shot_available,
     input wire [1:0] follow_health, input wire [6:0] follow_remaining,
     output wire [6:0] remaining,                  // this board's zombies left (leader/1P)
+    input wire follow_wave_clear,                 // follower: leader's WAVE CLEAR pause
+    output wire wave_clear_out,                   // leader/1P: sent to the follower
+    input wire hit_marker,                        // pulse: this player's shot hit a zombie
+    input wire [6:0] p1_kills, input wire [6:0] p2_kills,   // 2P end-screen scores
     input wire [7:0] partner_tile,                // other player's tile ({y,x}, y down)
     input wire partner_visible,                   // draw it on the SW0 map
     output wire two_player, output wire leader,
@@ -253,6 +258,31 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     assign frame_begin = oled_frame_begin && !frame_begin_prev;
     assign frame_idle = !sending_pixels && !oled_frame_begin;
 
+    // ---------------- Hit marker and WAVE CLEAR sweep ----------------
+    reg [HIT_SHIFT-1:0] hit_count;
+    reg hit_on;
+    always @(posedge clk) begin
+        if(rst || !playing_now) begin hit_on<=0; hit_count<=0; end
+        else if(hit_marker) begin hit_on<=1; hit_count<=0; end
+        else if(hit_on) begin
+            hit_count<=hit_count+1'b1;
+            if(&hit_count) hit_on<=0;
+        end
+    end
+    assign wave_clear_out = wave_clear;
+    wire banner_source = playing_now && (follower ? follow_wave_clear : wave_clear);
+    // Sweep: one row every 2^(CLEAR_SHIFT-7) clocks, top -12 to 64 (76 rows),
+    // so it crosses the screen in about 60% of the WAVE CLEAR pause.
+    localparam BANNER_SHIFT = (CLEAR_SHIFT>8) ? CLEAR_SHIFT-7 : 1;
+    reg [BANNER_SHIFT+6:0] banner_count;
+    always @(posedge clk) begin
+        if(rst || !banner_source) banner_count<=0;
+        else if(banner_count[BANNER_SHIFT+6:BANNER_SHIFT]!=7'd127) banner_count<=banner_count+1'b1;
+    end
+    wire [6:0] banner_rows = banner_count[BANNER_SHIFT+6:BANNER_SHIFT];
+    wire banner_live = banner_source && banner_rows<7'd76;
+    wire signed [7:0] banner_top = $signed({1'b0,banner_rows}) - 8'sd12;
+
     reg [255:0] frame_map;
     reg [7:0] frame_p1,frame_p2,frame_pos_x,frame_pos_y;
     reg [9:0] frame_angle;
@@ -271,6 +301,10 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     reg frame_sel,frame_tint,frame_blink,frame_over_ready;
     reg frame_link,frame_two_player,frame_peer_in_run,frame_partner;
     reg [6:0] frame_peer_wave;
+    reg frame_hit, frame_banner;
+    reg [6:0] frame_p1_kills, frame_p2_kills;
+    reg frame_you_p2;
+    reg signed [7:0] frame_banner_top;
     reg [6:0] frame_cx; reg [5:0] frame_cy;
     reg [5:0] frame_progress;
     // Related clocks, explicitly constrained in XDC, not asynchronous CDC.
@@ -289,7 +323,11 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
             frame_tint<=0; frame_blink<=0; frame_over_ready<=0;
             frame_link<=0; frame_two_player<=0; frame_peer_in_run<=0; frame_peer_wave<=0;
             frame_partner<=0;
+            frame_hit<=0; frame_banner<=0; frame_banner_top<=-8'sd12;
+            frame_p1_kills<=0; frame_p2_kills<=0; frame_you_p2<=0;
         end else if(oled_frame_begin) begin
+            frame_hit<=hit_on; frame_banner<=banner_live; frame_banner_top<=banner_top;
+            frame_p1_kills<=p1_kills; frame_p2_kills<=p2_kills; frame_you_p2<=follower;
             frame_map<=published_map; frame_p1<=playing_now ? player_tile : p1_addr;
             frame_p2<=partner_tile; frame_partner<=partner_visible && playing_now;
             frame_pos_x<=player_pos_x; frame_pos_y<=player_pos_y; frame_angle<=player_angle;
@@ -328,7 +366,10 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .progress(frame_progress),.over_ready(frame_over_ready),
         .link_up(frame_link),.two_player(frame_two_player),
         .peer_wave(frame_peer_wave),.peer_in_run(frame_peer_in_run),
-        .show_partner(frame_partner),.pixel_out(pixel_data));
+        .show_partner(frame_partner),
+        .hit_flash(frame_hit),.banner_show(frame_banner),.banner_top(frame_banner_top),
+        .p1_kills(frame_p1_kills),.p2_kills(frame_p2_kills),.you_are_p2(frame_you_p2),
+        .pixel_out(pixel_data));
 
     // The course OLED driver omits (95,63); the bridge sends this same composition.
     pixel_compositor #(.STAGE(STAGE),.ENABLE_2P(ENABLE_2P),.SHOW_CURSOR(SHOW_CURSOR),
@@ -347,7 +388,10 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .progress(frame_progress),.over_ready(frame_over_ready),
         .link_up(frame_link),.two_player(frame_two_player),
         .peer_wave(frame_peer_wave),.peer_in_run(frame_peer_in_run),
-        .show_partner(frame_partner),.pixel_out(last_pixel_data));
+        .show_partner(frame_partner),
+        .hit_flash(frame_hit),.banner_show(frame_banner),.banner_top(frame_banner_top),
+        .p1_kills(frame_p1_kills),.p2_kills(frame_p2_kills),.you_are_p2(frame_you_p2),
+        .pixel_out(last_pixel_data));
 
     wire raw_cs,raw_sdin,raw_sclk,raw_dcn;
     Oled_Display oled(.clk(oled_clk),.reset(oled_reset),.frame_begin(oled_frame_begin),

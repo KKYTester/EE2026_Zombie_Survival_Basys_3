@@ -33,6 +33,9 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
     input wire link_up, input wire two_player,
     input wire [6:0] peer_wave, input wire peer_in_run,
     input wire show_partner,          // p2_addr = the other player's tile (yellow)
+    input wire hit_flash,             // red crosshair after a hit
+    input wire [6:0] p1_kills, input wire [6:0] p2_kills, input wire you_are_p2,  // 2P end screens
+    input wire banner_show, input wire signed [7:0] banner_top,   // WAVE CLEAR sweep
     output wire [15:0] pixel_out);
     wire playing = game_state==3'd3;
     // Menu screen numbers: 0 title, 1 generating, 2 reserved, 3 game over, 4 victory.
@@ -41,11 +44,15 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
     wave_digits end_screen_digits(.value(wave),.tens(wave_tens),.ones(wave_ones));
     wire [3:0] peer_tens,peer_ones;
     wave_digits peer_digits(.value(peer_wave),.tens(peer_tens),.ones(peer_ones));
+    wire [3:0] p1k_tens,p1k_ones,p2k_tens,p2k_ones;
+    wave_digits p1_kill_digits(.value(p1_kills),.tens(p1k_tens),.ones(p1k_ones));
+    wave_digits p2_kill_digits(.value(p2_kills),.tens(p2k_tens),.ones(p2k_ones));
     wire [15:0] gun_pixel_data,hud_pixel_data,ammo_pixel_data,map_pixel_data,zombie_pixel_data,play_pixel_data,menu_pixel_data;
+    wire [15:0] effects_pixel_data;
     weapon_overlay gun(.px(px),.py(py),.show(!minimap_mode),.recoil(weapon_recoil),.flash(weapon_flash),
         .drop(weapon_drop),.pixel_in(world_pixel),.pixel_out(gun_pixel_data));
     hud_overlay hud(.px(px),.py(py),.minimap_mode(minimap_mode),.health(health),
-        .low_blink(low_blink),.wave(wave),.zombies(remaining),
+        .low_blink(low_blink),.wave(wave),.zombies(remaining),.hit_flash(hit_flash),
         .pixel_in(gun_pixel_data),.pixel_out(hud_pixel_data));
     ammo_overlay ammo_hud(.px(px),.py(py),.show(!minimap_mode),.ammo(ammo),
         .reloading(weapon_reloading),.pixel_in(hud_pixel_data),.pixel_out(ammo_pixel_data));
@@ -62,12 +69,16 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
         .active(zombie_active),.position_x(zombie_x),.position_y(zombie_y),
         .pixel_in(map_pixel_data),.pixel_out(zombie_pixel_data));
     play_effects effects(.pixel_in(zombie_pixel_data),.tint(tint),
-        .pixel_out(play_pixel_data));
+        .pixel_out(effects_pixel_data));
+    wave_clear_banner banner(.px(px),.py(py),.show(banner_show),.top(banner_top),
+        .pixel_in(effects_pixel_data),.pixel_out(play_pixel_data));
     menu_screens #(.ENABLE_2P(ENABLE_2P)) menu(.px(px),.py(py),.screen(menu_screen),
         .sel(menu_sel),.cursor_x(cursor_x),.cursor_y(cursor_y),.show_cursor(SHOW_CURSOR!=0),
         .progress(progress),.wave_tens(wave_tens),
         .wave_ones(wave_ones),.over_ready(over_ready),
         .link_up(link_up),.show_peer(two_player),.peer_tens(peer_tens),.peer_ones(peer_ones),
-        .peer_in_run(peer_in_run),.pixel(menu_pixel_data));
+        .peer_in_run(peer_in_run),
+        .p1_kill_tens(p1k_tens),.p1_kill_ones(p1k_ones),.p2_kill_tens(p2k_tens),.p2_kill_ones(p2k_ones),
+        .you_are_p2(you_are_p2),.pixel(menu_pixel_data));
     assign pixel_out = playing ? play_pixel_data : menu_pixel_data;
 endmodule

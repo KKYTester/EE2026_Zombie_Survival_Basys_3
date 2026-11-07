@@ -83,15 +83,19 @@ module My_Top_Module #(
         .clk(clk),.rst(reset),.switch_in(sw13),.flipped(test_hit));
 
     // ---------------- Two-board link ----------------
-    // Status word (22 bytes, both boards): state[2:0], 2-player run[3],
+    // Status word (24 bytes, both boards): state[2:0], 2-player run[3],
     // leader[4], game token[12:5], start priority[28:13], map seed[44:29],
     // wave[51:45], hearts[53:52], position x[69:54] and y[85:70] (north-up
     // Q4.12 tiles), view angle[95:86], diagnostic shot count[99:96],
     // follower's hearts[101:100] and zombies left[108:102] from the leader.
     // Queued follower shot: valid[112], ID[120:113], X[136:121], Y[152:137],
     // angle[162:153]. Leader's last accepted event ID is in [170:163].
-    // Zombie word (26 bytes): x[95:0], y[191:96] (Q4.8, y down),
-    // active mask[199:192], game token[207:200].
+    // UI (leader / 1P): WAVE CLEAR pause[171], count of the follower's shots
+    // that hit[173:172], kills by P1 (leader)[182:176] and P2 (follower)
+    // [189:183] for the end screens; [175:174] and [191:190] spare.
+    // Zombie word (28 bytes): x[95:0], y[191:96] (Q4.8, y down),
+    // active mask[199:192], game token[207:200], hit points[223:208]
+    // (2 bits per zombie, for the health bars).
     wire two_player, leader;
     wire [7:0] game_token;
     wire [15:0] start_priority;
@@ -101,6 +105,10 @@ module My_Top_Module #(
     reg [1:0] partner_hearts;          // leader: the follower's hearts
     wire [7:0] local_render_active;
     wire [95:0] local_render_x, local_render_y;
+    wire [15:0] local_render_hp;
+    reg [1:0] p2_hits;                 // leader: hits by the follower's shots
+    wire wave_clear_now;
+    reg [6:0] kills_p1, kills_p2;      // leader / 1P: zombies killed by each player
     wire event_ready,event_valid;
     wire [7:0] event_id;
     wire [15:0] event_x,event_y;
@@ -109,19 +117,19 @@ module My_Top_Module #(
     reg [15:0] partner_shot_x,partner_shot_y;
     reg [9:0] partner_shot_angle;
     wire combat_ready,combat_ready_p2;
-    wire [175:0] local_status;
-    wire [175:0] peer_status;
-    wire [207:0] peer_zombies;
+    wire [191:0] local_status;
+    wire [191:0] peer_status;
+    wire [223:0] peer_zombies;
     wire [7:0] link_errors,link_gaps;
     wire peer_status_valid, link_up;
     wire run_leader = two_player && leader;      // runs the shared zombies
     wire follower = two_player && !leader;       // shows the leader's zombies
     peer_link #(.CLK_FREQ(CLK_FREQ),.PERIOD_CYCLES(LINK_PERIOD),
-        .TIMEOUT_CYCLES(LINK_TIMEOUT),.STATUS_BYTES(22),.EXTRA_BYTES(26)) link(
+        .TIMEOUT_CYCLES(LINK_TIMEOUT),.STATUS_BYTES(24),.EXTRA_BYTES(28)) link(
         .clk(clk),.rst(reset),.uart_rx_pin(uart_rx_pin),.uart_tx_pin(uart_tx_pin),
         .local_status(local_status),
         .send_extra(run_leader && playing),
-        .local_extra({game_token,local_render_active, local_render_y, local_render_x}),
+        .local_extra({local_render_hp,game_token,local_render_active, local_render_y, local_render_x}),
         .peer_status(peer_status),.peer_status_valid(peer_status_valid),
         .peer_extra(peer_zombies),.peer_extra_valid(),
         .link_up(link_up),.packet_error(),.frame_error(),
@@ -150,7 +158,8 @@ module My_Top_Module #(
     wire shot_session_active = follower && playing && peer_in_run;
     reg shot_session_active_q;
     always @(posedge clk) shot_session_active_q<=!reset && shot_session_active;
-    assign local_status = {5'd0,partner_shot_ack,event_angle,event_y,event_x,event_id,
+    assign local_status = {2'd0, kills_p2, kills_p1, 2'd0, p2_hits, wave_clear_now,
+                           partner_shot_ack,event_angle,event_y,event_x,event_id,
                            event_valid && shot_session_active,
                            3'd0, remaining, partner_hearts, shot_count,
                            player_angle[9:0], player_y[15:0], player_x[15:0],
@@ -161,6 +170,32 @@ module My_Top_Module #(
         .fire_x(player_x[15:0]),.fire_y(player_y[15:0]),.fire_angle(player_angle[9:0]),
         .acknowledged(peer_status[170:163]),.ready(event_ready),.valid(event_valid),
         .event_id(event_id),.event_x(event_x),.event_y(event_y),.event_angle(event_angle));
+    // Hit marker (red crosshair). enemy_manager reports which player's shot hit.
+    // Leader / 1P: its own hits flash its crosshair; hits by the follower's
+    // shots are counted into the status word, and the follower flashes when
+    // that count changes.
+    wire shot_hit, shot_hit_player, shot_kill;
+    reg [1:0] p2_hits_seen;
+    reg hit_marker;
+    always @(posedge clk) begin
+        if(reset) begin p2_hits<=0; p2_hits_seen<=0; hit_marker<=0; end
+        else begin
+            if(shot_hit && shot_hit_player) p2_hits<=p2_hits+1'b1;
+            p2_hits_seen<=peer_status[173:172];
+            hit_marker <= follower ? (peer_in_run && peer_status[173:172]!=p2_hits_seen)
+                                   : (shot_hit && !shot_hit_player);
+        end
+    end
+    // Kill scores: counted where the shots are judged (leader / 1P), reset at
+    // the start of each run, kept for the end screens; the follower shows the
+    // leader's counts from the status word.
+    always @(posedge clk) begin
+        if(reset || play_start) begin kills_p1<=0; kills_p2<=0; end
+        else if(shot_hit && shot_kill) begin
+            if(shot_hit_player) begin if(kills_p2!=7'd127) kills_p2<=kills_p2+1'b1; end
+            else if(kills_p1!=7'd127) kills_p1<=kills_p1+1'b1;
+        end
+    end
     always @(posedge clk) begin
         partner_shot<=0;
         if(reset || play_start) begin
@@ -221,15 +256,26 @@ module My_Top_Module #(
     // off the long paths into the sprite renderer and the OLED frame capture.
     reg [7:0] render_active;
     reg [95:0] render_x, render_y;
+    reg [15:0] render_hp;
     always @(posedge clk) begin
         render_active <= follower ? remote_active : local_render_active;
         render_x <= follower ? peer_zombies[95:0] : local_render_x;
         render_y <= follower ? peer_zombies[191:96] : local_render_y;
+        render_hp <= follower ? peer_zombies[223:208] : local_render_hp;
     end
+    // Killed zombies stay on screen briefly: red, tipping over (display only).
+    wire [7:0] draw_active, draw_dying;
+    wire [95:0] draw_x, draw_y;
+    wire [15:0] draw_hp;
+    wire [31:0] draw_fall;
+    zombie_death_fx death_fx(.clk(clk),.rst(reset),.playing(playing),
+        .active(render_active),.in_x(render_x),.in_y(render_y),.in_hp(render_hp),
+        .draw_active(draw_active),.draw_x(draw_x),.draw_y(draw_y),.draw_hp(draw_hp),
+        .dying(draw_dying),.fall(draw_fall));
     // Sprite slot 8 is the partner (Q8 coordinates, y down like the zombies).
-    wire [8:0] sprite_active = {partner_visible, render_active};
-    wire [107:0] sprite_x = {partner_x[15:4], render_x};
-    wire [107:0] sprite_y = {12'd0 - partner_y[15:4], render_y};
+    wire [8:0] sprite_active = {partner_visible, draw_active};
+    wire [107:0] sprite_x = {partner_x[15:4], draw_x};
+    wire [107:0] sprite_y = {12'd0 - partner_y[15:4], draw_y};
     // Give the player one clock to load a newly published spawn before scan 0.
     reg map_valid_delayed=0;
     always @(posedge clk) map_valid_delayed <= !reset && map_ready && !map_busy;
@@ -252,6 +298,7 @@ module My_Top_Module #(
         .display_bank(display_bank),.scene_valid(scene_valid),
         .camera_x(player_x[15:4]),.camera_y(camera_south),.camera_angle(player_angle[9:0]),
         .facing(2'd0),.active(sprite_active),.zombie_x(sprite_x),.zombie_y(sprite_y),
+        .hp({2'd3, draw_hp}),.dying({1'b0, draw_dying}),.fall({4'd0, draw_fall}),
         .pixel_x(pixel_x),.pixel_y(pixel_y),.wall_depth({column_depth,3'b0}),
         .background(wall_pixel),.done(sprites_ready),.pixel(world_pixel));
 
@@ -278,6 +325,10 @@ module My_Top_Module #(
         .shot_available(follower ? (shot_session_active && event_ready) : combat_ready),
         .follow_health(peer_status[101:100]),.follow_remaining(peer_status[108:102]),
         .remaining(remaining),
+        .follow_wave_clear(peer_status[171]),.wave_clear_out(wave_clear_now),
+        .hit_marker(hit_marker),
+        .p1_kills(follower ? peer_status[182:176] : kills_p1),
+        .p2_kills(follower ? peer_status[189:183] : kills_p2),
         .partner_tile(partner_tile),.partner_visible(partner_visible),
         .two_player(two_player),.leader(leader),.game_token(game_token),.start_priority(start_priority),
         .player_tile(player_tile),
@@ -328,11 +379,11 @@ module My_Top_Module #(
         .shot_fired(shot_fired),.aim(2'd0),.camera_x(player_x),.camera_y(player_y),
         .camera_angle(player_angle[9:0]),
         .camera2_x({16'd0,partner_shot_x}),.camera2_y({16'd0,partner_shot_y}),.camera2_angle(partner_shot_angle),
-        .shot_hit(),.player_hit(zombie_hit),
+        .shot_hit(shot_hit),.player_hit(zombie_hit),
         .player_active(alive_q),.player2_active(partner_in_game_q),.player2_tile(partner_tile),
         .shot_fired_p2(partner_shot_q),.aim_p2(2'd0),.shot_ready(combat_ready),.shot_ready_p2(combat_ready_p2),
-        .shot_hit_player(),.player_hit_p2(zombie_hit_p2),.active(local_render_active),
-        .render_x(local_render_x),.render_y(local_render_y),.spawn_occupied(spawn_occupied),.read_id(3'd0),
+        .shot_hit_player(shot_hit_player),.shot_kill(shot_kill),.player_hit_p2(zombie_hit_p2),.active(local_render_active),
+        .render_x(local_render_x),.render_y(local_render_y),.render_hp(local_render_hp),.spawn_occupied(spawn_occupied),.read_id(3'd0),
         .read_active(),.read_x(),.read_y(),.read_hp(),.read_type(),.read_state(),.read_cooldown());
 
     // ---------------- Board displays ----------------

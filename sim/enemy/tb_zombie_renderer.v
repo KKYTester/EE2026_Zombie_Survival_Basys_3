@@ -18,6 +18,7 @@ module tb_zombie_renderer;
     zombie_renderer sprites(.clk(clk),.reset(reset),.prepare(prepare),
         .display_bank(bank),.scene_valid(scene_valid),.camera_x(12'd384),
         .camera_y(12'd384),.facing(facing),.active(active),.zombie_x(xs),.zombie_y(ys),
+        .hp({16{1'b1}}),.dying(8'd0),.fall(32'd0),
         .pixel_x(x),.pixel_y(y),.wall_depth(depth),.background(16'h1234),
         .done(done),.pixel(pixel));
     demo_wall_view walls(.clk(clk),.reset(reset),.prepare(prepare),.display_bank(bank),
@@ -33,7 +34,7 @@ module tb_zombie_renderer;
     task expect_pixel(input [6:0] px, input [5:0] py, input [15:0] expected);
         begin
             x=px; y=py;
-            repeat(34) @(negedge clk);
+            repeat(56) @(negedge clk);   // 8 slots x 6 clocks + margin
             if(pixel!==expected)
                 $fatal(1,"pixel (%0d,%0d): got %h expected %h",x,y,pixel,expected);
         end

@@ -15,6 +15,10 @@ module menu_screens #(parameter ENABLE_2P = 0)(
     input wire show_peer,             // end screens: show the other board's wave
     input wire [3:0] peer_tens, input wire [3:0] peer_ones,
     input wire peer_in_run,           // the other board is still playing
+    // 2-player end screens: zombies killed by each player (two digits each).
+    input wire [3:0] p1_kill_tens, input wire [3:0] p1_kill_ones,
+    input wire [3:0] p2_kill_tens, input wire [3:0] p2_kill_ones,
+    input wire you_are_p2,            // highlight this board's own line
     output reg [15:0] pixel);
     localparam BG=16'h0842, RED=16'hE145, WHITE=16'hEF7D, YELLOW=16'hF645,
                GREY=16'h6B6F, DARK=16'h4208, BAND=16'h2921, GROUND=16'h1162,
@@ -82,17 +86,21 @@ module menu_screens #(parameter ENABLE_2P = 0)(
                     line_on=1; str={"YOU",104'd0}; len=3; x0=37; y0=6; shift=1; color=YELLOW;
                 end else if(py>=18 && py<=27) begin
                     line_on=1; str={"SURVIVED",64'd0}; len=8; x0=17; y0=18; shift=1; color=GREEN;
-                end else if(py>=36 && py<=40) begin
-                    line_on=1; y0=36;
+                end else if(show_peer ? (py>=31 && py<=35) : (py>=36 && py<=40)) begin
+                    line_on=1; y0 = show_peer ? 6'd31 : 6'd36;
                     if(wave_tens!=0) begin
                         str={8'd48+{4'd0,wave_tens},8'd48+{4'd0,wave_ones}," WAVES CLEARED"}; len=16; x0=17;
                     end else begin
                         str={8'd48+{4'd0,wave_ones}," WAVES CLEARED",8'd0}; len=15; x0=19;
                     end
-                end else if(py>=44 && py<=48 && show_peer) begin
-                    line_on=1; y0=44; color = peer_in_run ? GREEN : GREY;
-                    str={"PARTNER WAVE ",8'd48+{4'd0,peer_tens},8'd48+{4'd0,peer_ones},8'd0};
-                    len=15; x0=18;
+                end else if(py>=38 && py<=42 && show_peer) begin
+                    line_on=1; y0=38; color = you_are_p2 ? WHITE : YELLOW;
+                    str={"P1 KILLS ",8'd48+{4'd0,p1_kill_tens},8'd48+{4'd0,p1_kill_ones},40'd0};
+                    len=11; x0=26;
+                end else if(py>=45 && py<=49 && show_peer) begin
+                    line_on=1; y0=45; color = you_are_p2 ? YELLOW : WHITE;
+                    str={"P2 KILLS ",8'd48+{4'd0,p2_kill_tens},8'd48+{4'd0,p2_kill_ones},40'd0};
+                    len=11; x0=26;
                 end else if(py>=52 && py<=56 && over_ready) begin
                     line_on=1; str={"CLICK TO PLAY",24'd0}; len=13; x0=22; y0=52; color=HINT;
                 end
@@ -107,10 +115,14 @@ module menu_screens #(parameter ENABLE_2P = 0)(
                     end else begin
                         str={"WAVE ",8'd48+{4'd0,wave_ones},80'd0}; len=6; x0=37;
                     end
-                end else if(py>=40 && py<=44 && show_peer) begin
-                    line_on=1; y0=40; color = peer_in_run ? GREEN : GREY;
-                    str={"PARTNER WAVE ",8'd48+{4'd0,peer_tens},8'd48+{4'd0,peer_ones},8'd0};
-                    len=15; x0=18;
+                end else if(py>=38 && py<=42 && show_peer) begin
+                    line_on=1; y0=38; color = you_are_p2 ? WHITE : YELLOW;
+                    str={"P1 KILLS ",8'd48+{4'd0,p1_kill_tens},8'd48+{4'd0,p1_kill_ones},40'd0};
+                    len=11; x0=26;
+                end else if(py>=45 && py<=49 && show_peer) begin
+                    line_on=1; y0=45; color = you_are_p2 ? YELLOW : WHITE;
+                    str={"P2 KILLS ",8'd48+{4'd0,p2_kill_tens},8'd48+{4'd0,p2_kill_ones},40'd0};
+                    len=11; x0=26;
                 end else if(py>=52 && py<=56 && over_ready) begin
                     line_on=1; str={"CLICK TO RETRY",16'd0}; len=14; x0=20; y0=52; color=HINT;
                 end
