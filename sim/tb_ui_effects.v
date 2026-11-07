@@ -16,7 +16,7 @@ module tb_ui_effects;
         .seed(16'h1ace),.map_ready(1'b1),.map_busy(1'b0),.error_code(3'd0),
         .health(2'd3),.low_blink(1'b0),.wave(7'd3),.remaining(7'd5),.zombie_tiles(256'd0),.tint(1'b0),
         .zombie_active(8'd0),.zombie_x(96'd0),.zombie_y(96'd0),
-        .weapon_recoil(1'b0),.weapon_flash(1'b0),.weapon_reloading(1'b0),.ammo(3'd6),.weapon_drop(5'd31),
+        .weapon_recoil(1'b0),.weapon_flash(1'b0),.weapon_reloading(1'b0),.ammo(4'd6),.ammo_capacity(4'd6),.pickups(18'd0),.weapon_drop(5'd31),
         .menu_sel(1'b0),.cursor_x(7'd0),.cursor_y(6'd0),.progress(6'd0),.over_ready(1'b0),
         .link_up(two),.two_player(two),.peer_wave(7'd3),.peer_in_run(1'b0),.show_partner(1'b0),
         .p1_kills(7'd12),.p2_kills(7'd7),.you_are_p2(you_p2),

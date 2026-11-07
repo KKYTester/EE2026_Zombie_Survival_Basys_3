@@ -40,7 +40,7 @@ module tb_two_board_game;
         .ps2_clk(s_ps2c),.ps2_data(s_ps2d),.led(),.JB(),.seg(),.dp(),.an(),
         .uart_tx_pin(s_tx),.uart_rx_pin(1'b1));
 
-    integer errors=0, i, b_shots=0;
+    integer errors=0, i, n, b_shots=0;
     reg watch_p2_hit=0, a_marked=0;
     always @(posedge clk) if(watch_p2_hit && A.hit_marker) a_marked=1;
     reg [9:0] first_angle,second_angle;
@@ -165,6 +165,30 @@ module tb_two_board_game;
         for(i=0;i<200000 && !(B.game.p1_kills==2 && B.game.p2_kills==1);i=i+1) @(posedge clk);
         if(B.game.p1_kills!==2 || B.game.p2_kills!==1) fail("follower does not show the leader's kill scores");
         $display("kills: P1 %0d, P2 %0d on both boards", A.game.p1_kills, B.game.p2_kills);
+        // 4d. Pickups: the leader places one health and one magazine pickup per
+        // wave and the follower shows the same ones. P2 standing on the
+        // magazine upgrades the follower's gun to 7 full rounds; a hurt P2 on
+        // the health pickup gets a heart back on both boards.
+        for(i=0;i<400000 && !(A.pickups[16] && A.pickups[17]);i=i+1) @(posedge clk);
+        if(!(A.pickups[16] && A.pickups[17])) fail("leader placed no pickups");
+        for(i=0;i<200000 && B.pickups!==A.pickups;i=i+1) @(posedge clk);
+        if(B.pickups!==A.pickups) fail("follower does not show the leader's pickups");
+        if(B.game.ammo_capacity!==6) fail("follower magazine not 6 at the start");
+        force A.partner_tile = A.pickups[15:8];
+        for(i=0;i<300000 && B.game.ammo_capacity!=7;i=i+1) @(posedge clk);
+        release A.partner_tile;
+        if(B.game.ammo_capacity!==7 || B.game.ammo!==7) fail("P2 magazine pickup did not upgrade the follower's gun");
+        if(A.game.ammo_capacity!==6) fail("P2's magazine upgraded the leader's gun");
+        if(A.pickups[17]) fail("magazine pickup not removed after P2 took it");
+        hit_b(1); repeat(2000) @(posedge clk);
+        i=A.partner_hearts;
+        force A.partner_tile = A.pickups[7:0];
+        repeat(200) @(posedge clk);
+        release A.partner_tile;
+        if(A.partner_hearts!==i+1) fail("P2 health pickup did not restore a heart");
+        for(n=0;n<200000 && B.health!==A.partner_hearts;n=n+1) @(posedge clk);
+        if(B.health!==A.partner_hearts) fail("follower hearts not updated after the health pickup");
+        $display("pickups: shared %h, P2 magazine -> %0d rounds, P2 hearts %0d -> %0d", A.pickups, B.game.ammo_capacity, i, A.partner_hearts);
 
         // 5. Follower fires twice during a short packet blackout. Both shots
         // keep their original pose even after turning. Block the return path

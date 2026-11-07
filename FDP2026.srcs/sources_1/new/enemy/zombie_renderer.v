@@ -7,12 +7,17 @@
 //    (hp 1 or 2); full-health zombies show no bar.
 //  - dying + fall (0..15): a killed zombie is drawn tinted red and rotated
 //    about its feet by fall*6 degrees, so it tips over sideways onto the floor.
+// PICKUP_SLOTS (0 or 2): the last two slots are pickups, drawn as small icons
+// floating just above the floor: a white medkit with a red cross (slot
+// SLOTS-2) and a brass magazine (slot SLOTS-1). The ally, if any, is then the
+// slot just before them.
 module zombie_renderer #(
     parameter USE_CAMERA_POSE=0,
     parameter integer FOCAL_X=64,
     parameter integer FOCAL_Y=64,
     parameter integer SLOTS=8,             // 2..16 billboards
-    parameter HAS_ALLY=0
+    parameter HAS_ALLY=0,
+    parameter integer PICKUP_SLOTS=0       // 0 or 2
 )(
     input wire clk, reset, prepare, display_bank, scene_valid,
     input wire [11:0] camera_x, camera_y,
@@ -152,7 +157,7 @@ module zombie_renderer #(
     reg [7:0] candidate_height;
     reg [15:0] best_color;
     wire [SB:0] read_slot = {req_bank,scan};
-    reg candidate_ally, candidate_dying;
+    reg candidate_ally, candidate_dying, candidate_health, candidate_mag;
     reg [1:0] candidate_hp;
     reg [3:0] candidate_fall;
     reg signed [16:0] local_x;
@@ -183,7 +188,17 @@ module zombie_renderer #(
     reg opaque;
     reg [15:0] sprite_color;
     // Health bar: 9 pixels wide (3 per hit point), 2 rows, one row above the head.
-    wire show_bar = !candidate_ally && !candidate_dying && candidate_hp!=2'd0 && candidate_hp!=2'd3;
+    wire show_bar = !candidate_ally && !candidate_health && !candidate_mag &&
+                    !candidate_dying && candidate_hp!=2'd0 && candidate_hp!=2'd3;
+    // Pickup icon: half-size h, centred 2h above the feet row.
+    wire [7:0] icon_h = (candidate_height>>3) + 8'd1;
+    wire signed [9:0] icon_dy_raw = shape_y - ($signed({2'd0,candidate_height}) - 10'sd1
+                                               - $signed({1'b0,icon_h,1'b0}));
+    wire [9:0] icon_dy = icon_dy_raw<0 ? -icon_dy_raw : icon_dy_raw;
+    wire [7:0] icon_third = icon_h/3;
+    wire in_icon_box = abs_x<={9'd0,icon_h} && icon_dy<={2'd0,icon_h};
+    wire in_cross = abs_x<={9'd0,icon_third} || icon_dy<={2'd0,icon_third};
+    wire in_mag = abs_x<={9'd0,icon_h>>1} && icon_dy<={2'd0,icon_h};
     wire bar_row = shape_y==-10'sd3 || shape_y==-10'sd2;
     wire bar_col = shape_x>=-17'sd4 && shape_x<=17'sd4;
     wire [1:0] bar_segment = shape_x<-17'sd1 ? 2'd1 : shape_x<=17'sd1 ? 2'd2 : 2'd3;
@@ -206,6 +221,13 @@ module zombie_renderer #(
         sprite_color=body_color;
         // Dying: Minecraft-style red tint (full red, green and blue darkened).
         if(candidate_dying) sprite_color={5'h1F, 1'b0, body_color[10:6], 1'b0, body_color[4:1]};
+        if(candidate_health) begin
+            opaque=in_icon_box;
+            sprite_color=in_cross ? 16'hF800 : 16'hFFFF;            // red cross on white
+        end else if(candidate_mag) begin
+            opaque=in_mag;
+            sprite_color=(icon_dy==10'd0) ? 16'h4208 : 16'hFD20;    // brass, dark seam
+        end
         if(show_bar && bar_row && bar_col) begin
             opaque=1;
             sprite_color=(bar_segment<=candidate_hp) ? 16'h07E0 : 16'h8000;  // green / dark red
@@ -230,7 +252,9 @@ module zombie_renderer #(
             PIX_READ: begin
                 candidate_valid<=valid[read_slot]; candidate_depth<=depths[read_slot];
                 candidate_center<=centers[read_slot]; candidate_height<=heights[read_slot];
-                candidate_ally<=HAS_ALLY && scan==SLOTS-1;
+                candidate_ally<=HAS_ALLY && scan==SLOTS-1-PICKUP_SLOTS;
+                candidate_health<=PICKUP_SLOTS!=0 && scan==SLOTS-2;
+                candidate_mag<=PICKUP_SLOTS!=0 && scan==SLOTS-1;
                 candidate_hp<=hps[read_slot]; candidate_dying<=dyings[read_slot];
                 candidate_fall<=falls[read_slot];
                 pixel_state<=PIX_OFFSET;

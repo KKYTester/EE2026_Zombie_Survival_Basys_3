@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 // Reusable, purely combinational OLED drawing chain.
-// World -> gun -> HUD -> ammo -> map -> zombie dots -> damage tint.
+// World -> gun -> HUD -> ammo -> map -> zombie dots -> pickups -> damage tint.
 // Non-playing game states select the full-screen menu instead.
 // The caller supplies coherent frame snapshots; no clocks or state live here.
 // Use the same module for ordinary pixels and the tail-bridge pixel (95,63).
@@ -24,7 +24,8 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
     input wire [95:0] zombie_x, zombie_y,
     // Weapon animation and ammunition.
     input wire weapon_recoil, input wire weapon_flash, input wire weapon_reloading,
-    input wire [2:0] ammo, input wire [4:0] weapon_drop,
+    input wire [3:0] ammo, input wire [3:0] ammo_capacity, input wire [4:0] weapon_drop,
+    input wire [17:0] pickups,        // {mag valid, health valid, mag tile, health tile}
     // Menu snapshot.
     input wire menu_sel, input wire [6:0] cursor_x, input wire [5:0] cursor_y,
     input wire [5:0] progress, input wire over_ready,
@@ -54,7 +55,7 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
     hud_overlay hud(.px(px),.py(py),.minimap_mode(minimap_mode),.health(health),
         .low_blink(low_blink),.wave(wave),.zombies(remaining),.hit_flash(hit_flash),
         .pixel_in(gun_pixel_data),.pixel_out(hud_pixel_data));
-    ammo_overlay ammo_hud(.px(px),.py(py),.show(!minimap_mode),.ammo(ammo),
+    ammo_overlay ammo_hud(.px(px),.py(py),.show(!minimap_mode),.ammo(ammo),.capacity(ammo_capacity),
         .reloading(weapon_reloading),.pixel_in(hud_pixel_data),.pixel_out(ammo_pixel_data));
     map_display_mux display_mux(.px(px),.py(py),.minimap_mode(minimap_mode),
         .fp_pixel_data(ammo_pixel_data),.map_bits(map_bits),.p1_addr(p1_addr),
@@ -68,7 +69,12 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
         .px(px),.py(py),.minimap_mode(minimap_mode),.zombies(zombie_tiles),
         .active(zombie_active),.position_x(zombie_x),.position_y(zombie_y),
         .pixel_in(map_pixel_data),.pixel_out(zombie_pixel_data));
-    play_effects effects(.pixel_in(zombie_pixel_data),.tint(tint),
+    wire [15:0] pickup_pixel_data;
+    pickup_overlay pickup_dots(.px(px),.py(py),.minimap_mode(minimap_mode),
+        .health_valid(pickups[16]),.health_tile(pickups[7:0]),
+        .mag_valid(pickups[17]),.mag_tile(pickups[15:8]),
+        .pixel_in(zombie_pixel_data),.pixel_out(pickup_pixel_data));
+    play_effects effects(.pixel_in(pickup_pixel_data),.tint(tint),
         .pixel_out(effects_pixel_data));
     wave_clear_banner banner(.px(px),.py(py),.show(banner_show),.top(banner_top),
         .pixel_in(effects_pixel_data),.pixel_out(play_pixel_data));

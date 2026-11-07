@@ -35,7 +35,7 @@ module oled_renderer_tb;
         .error_code(board.game.frame_error),.health(board.game.frame_health),.low_blink(board.game.frame_blink),
         .wave(board.game.frame_wave),.remaining(board.game.frame_remaining),.zombie_tiles(board.game.frame_zombies),
         .tint(board.game.frame_tint),.weapon_recoil(board.game.frame_recoil),.weapon_flash(board.game.frame_flash),
-        .weapon_reloading(board.game.frame_reloading),.ammo(board.game.frame_ammo),.weapon_drop(board.game.frame_drop),
+        .weapon_reloading(board.game.frame_reloading),.ammo(board.game.frame_ammo),.ammo_capacity(board.game.frame_capacity),.pickups(board.game.frame_pickups),.weapon_drop(board.game.frame_drop),
         .menu_sel(board.game.frame_sel),.cursor_x(board.game.frame_cx),.cursor_y(board.game.frame_cy),
         .progress(board.game.frame_progress),.over_ready(board.game.frame_over_ready),
         .hit_flash(board.game.frame_hit),.banner_show(board.game.frame_banner),.banner_top(board.game.frame_banner_top),
