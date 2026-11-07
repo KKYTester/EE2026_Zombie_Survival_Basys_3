@@ -123,8 +123,9 @@ Both players are in **one shared game**: the same map, the same zombies.
    keeps its current target on a tie. Shots from both boards hit zombies.
    The other board draws the same zombies and sends its position, view
    angle and shots.
-4. You see your partner as a blue-shirted figure in your 3D view (hidden
-   behind walls like the zombies) and as a yellow tile on the SW0 map.
+4. You see your partner as a blue-shirted figure in your 3D view and as a
+   yellow tile on the SW0 map. A downed teammate appears as a fallen figure
+   with a brown map marker.
    LED14-12 show your partner's hearts.
 5. Each player has three hearts. A player who is down is frozen (cannot move
    or shoot) while the partner fights on. The run ends for both boards when
@@ -242,6 +243,8 @@ row-index division on the integrated pixel path.
   available. A health pack restores one heart to a living, injured player.
   A magazine adds one round of capacity up to nine and refills the weapon.
   Both pickups appear in the first-person view and on the map.
+- The HUD shows the wave in yellow and the player's own kill total in green.
+  A downed player sees a notice while the shared run continues.
 - One reusable `pixel_compositor` defines the gameplay drawing order:
   world -> weapon -> HUD -> ammo -> map -> zombie dots -> damage tint.
   Outside gameplay, a full-screen menu is selected instead. `game_core` uses

@@ -35,6 +35,7 @@ module tb_pickup_visuals;
         .ammo(ammo),.ammo_capacity(cap),.pickups({1'b1,1'b1,8'h3C,8'hA4}),.weapon_drop(5'd31),
         .menu_sel(1'b0),.cursor_x(7'd0),.cursor_y(6'd0),.progress(6'd0),.over_ready(1'b0),
         .link_up(1'b0),.two_player(1'b0),.peer_wave(7'd0),.peer_in_run(1'b0),.show_partner(1'b0),
+        .partner_dead(1'b0),
         .hit_flash(1'b0),.banner_show(1'b0),.banner_top(8'sd0),.p1_kills(7'd0),.p2_kills(7'd0),.you_are_p2(1'b0),
         .pixel_out(hud));
     integer brass_cols, spent_cols, first_col;

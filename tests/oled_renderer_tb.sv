@@ -39,6 +39,7 @@ module oled_renderer_tb;
         .menu_sel(board.game.frame_sel),.cursor_x(board.game.frame_cx),.cursor_y(board.game.frame_cy),
         .progress(board.game.frame_progress),.over_ready(board.game.frame_over_ready),
         .hit_flash(board.game.frame_hit),.banner_show(board.game.frame_banner),.banner_top(board.game.frame_banner_top),
+        .show_partner(board.game.frame_partner),.partner_dead(board.game.frame_partner_dead),
         .p1_kills(board.game.frame_p1_kills),.p2_kills(board.game.frame_p2_kills),.you_are_p2(board.game.frame_you_p2),
         .pixel_out(expected));
     task build_reference;

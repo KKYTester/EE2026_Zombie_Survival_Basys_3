@@ -109,7 +109,8 @@ spawn or move zombies; it draws the leader's zombie word and shows the leader's
 wave and zombies-left count. A player with no hearts is frozen; the leader ends
 the run when both are down or the last wave is won, and the follower's run ends
 with the leader's. Both boards draw the other player in sprite slot 8 and as a
-yellow tile on the SW0 map. Slots 9 and 10 draw the shared health pack and
+yellow tile on the SW0 map. Downed teammates appear as fallen figures with
+brown map markers. Slots 9 and 10 draw the shared health pack and
 magazine. The leader places and awards pickups. A health pack restores one
 heart to a living, injured player. A magazine adds one round of capacity up
 to nine and refills it. The follower applies any missed magazine upgrades

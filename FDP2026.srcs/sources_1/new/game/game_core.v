@@ -330,7 +330,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     reg [2:0] frame_error;
     reg [2:0] frame_screen;
     reg frame_sel,frame_tint,frame_blink,frame_over_ready;
-    reg frame_link,frame_two_player,frame_peer_in_run,frame_partner;
+    reg frame_link,frame_two_player,frame_peer_in_run,frame_partner,frame_partner_dead;
     reg [6:0] frame_peer_wave;
     reg frame_hit, frame_banner;
     reg [6:0] frame_p1_kills, frame_p2_kills;
@@ -353,7 +353,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
             frame_cx<=48; frame_cy<=40; frame_progress<=0;
             frame_tint<=0; frame_blink<=0; frame_over_ready<=0;
             frame_link<=0; frame_two_player<=0; frame_peer_in_run<=0; frame_peer_wave<=0;
-            frame_partner<=0;
+            frame_partner<=0; frame_partner_dead<=0;
             frame_hit<=0; frame_banner<=0; frame_banner_top<=-8'sd12;
             frame_p1_kills<=0; frame_p2_kills<=0; frame_you_p2<=0;
         end else if(oled_frame_begin) begin
@@ -361,6 +361,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
             frame_p1_kills<=p1_kills; frame_p2_kills<=p2_kills; frame_you_p2<=follower;
             frame_map<=published_map; frame_p1<=playing_now ? player_tile : p1_addr;
             frame_p2<=partner_tile; frame_partner<=partner_visible && playing_now;
+            frame_partner_dead<=partner_visible && playing_now && two_player && !teammate_alive;
             frame_pos_x<=player_pos_x; frame_pos_y<=player_pos_y; frame_angle<=player_angle;
             frame_health<=health;
             frame_wave<=follower ? peer_wave : wave;
@@ -398,7 +399,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .progress(frame_progress),.over_ready(frame_over_ready),
         .link_up(frame_link),.two_player(frame_two_player),
         .peer_wave(frame_peer_wave),.peer_in_run(frame_peer_in_run),
-        .show_partner(frame_partner),
+        .show_partner(frame_partner),.partner_dead(frame_partner_dead),
         .hit_flash(frame_hit),.banner_show(frame_banner),.banner_top(frame_banner_top),
         .p1_kills(frame_p1_kills),.p2_kills(frame_p2_kills),.you_are_p2(frame_you_p2),
         .pixel_out(pixel_data));
@@ -420,7 +421,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .progress(frame_progress),.over_ready(frame_over_ready),
         .link_up(frame_link),.two_player(frame_two_player),
         .peer_wave(frame_peer_wave),.peer_in_run(frame_peer_in_run),
-        .show_partner(frame_partner),
+        .show_partner(frame_partner),.partner_dead(frame_partner_dead),
         .hit_flash(frame_hit),.banner_show(frame_banner),.banner_top(frame_banner_top),
         .p1_kills(frame_p1_kills),.p2_kills(frame_p2_kills),.you_are_p2(frame_you_p2),
         .pixel_out(last_pixel_data));

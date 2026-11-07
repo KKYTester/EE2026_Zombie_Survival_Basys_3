@@ -244,6 +244,8 @@ module tb_two_board_game;
         if(B.health!==0 || A.partner_hearts!==0) fail("B not down");
         if(A.game_state!=3 || B.game_state!=3) fail("run ended while A was still alive");
         if(A.partner_in_game) fail("zombies still target the downed B");
+        if(A.sprite_dying[8]!==1'b1 || A.sprite_fall[35:32]!==4'd15 || B.sprite_dying[8]!==1'b0)
+            fail("downed follower avatar shown on the wrong board");
         // A downed player's BTN-C / click cannot restart anything.
         press(2); press(2);
         repeat(30000) @(posedge clk);
@@ -266,6 +268,23 @@ module tb_two_board_game;
         if(A.game.p1_kills<2 || B.game.p1_kills!==A.game.p1_kills || B.game.p2_kills!==A.game.p2_kills)
             fail("kill scores lost at game over");
         else $display("both down: both boards show GAME OVER");
+
+        // Start another run and reverse which player goes down first.
+        a_hit=0; a_reset=1; b_reset=1; repeat(50) @(posedge clk);
+        a_reset=0; repeat(1000) @(posedge clk); b_reset=0;
+        for(i=0;i<300000 && !(A.link_up && B.link_up);i=i+1) @(posedge clk);
+        press(1); press(0); wait_both(3'd3,800000);
+        if(A.game_state!=3 || B.game_state!=3 || !A.leader || B.leader)
+            fail("could not start the leader-down test");
+        repeat(40000) @(posedge clk);
+        if(!B.teammate_alive_q) fail("follower did not recognise the living leader");
+        hit_a(3);
+        for(i=0;i<80000 && !B.sprite_dying[8];i=i+1) @(posedge clk);
+        if(A.health!==0 || B.health===0 || A.game_state!=3 || B.game_state!=3)
+            fail("run did not continue with only the follower alive");
+        if(B.sprite_dying[8]!==1'b1 || B.sprite_fall[35:32]!==4'd15 || A.sprite_dying[8]!==1'b0)
+            fail("downed leader avatar shown on the wrong board");
+        $display("leader down: follower remains in play and shows the leader's fallen avatar");
 
         if(errors==0) $display("PASS"); else $display("FAILED with %0d errors", errors);
         $finish;

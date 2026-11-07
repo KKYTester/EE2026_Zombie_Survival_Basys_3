@@ -224,8 +224,13 @@ module zombie_renderer #(
         end
         sprite_color=body_color;
         if(candidate_windup && !candidate_ally) sprite_color=16'hFD20;
-        // Dying: Minecraft-style red tint (full red, green and blue darkened).
-        if(candidate_dying) sprite_color={5'h1F, 1'b0, body_color[10:6], 1'b0, body_color[4:1]};
+        // Zombies turn red when killed. A downed ally becomes a muted brown
+        // body and uses the same fall pose, making its last position obvious.
+        if(candidate_dying && candidate_ally)
+            sprite_color = (shape_y < $signed({2'd0,head_height})) ? 16'hB5A8 :
+                           (shape_y < $signed({2'd0,legs_start})) ? 16'h8A45 : 16'h5A23;
+        else if(candidate_dying)
+            sprite_color={5'h1F, 1'b0, body_color[10:6], 1'b0, body_color[4:1]};
         if(candidate_health) begin
             opaque=in_icon_box;
             sprite_color=in_cross ? 16'hF800 : 16'hFFFF;            // red cross on white
