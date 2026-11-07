@@ -42,6 +42,7 @@ module enemy_manager #(
     output wire [255:0] spawn_occupied,
     output reg [MAX_ENEMIES-1:0] active,
     output wire [MAX_ENEMIES*(COORD_FRAC_BITS+4)-1:0] render_x, render_y,
+    output wire [2*MAX_ENEMIES-1:0] render_hp,   // hit points per slot, capped at 3 (health bars)
     // Combinational record lookup for debugging and future consumers.
     input wire [ID_BITS-1:0] read_id,
     output reg read_active,
@@ -72,6 +73,10 @@ module enemy_manager #(
         assign render_y[render_slot*WIDTH +: WIDTH]=pos_y[render_slot][WIDTH-1:0];
     end endgenerate
     reg [7:0] hp [0:MAX_ENEMIES-1];
+    genvar hp_slot;
+    generate for(hp_slot=0; hp_slot<MAX_ENEMIES; hp_slot=hp_slot+1) begin : g_render_hp
+        assign render_hp[2*hp_slot +: 2] = hp[hp_slot]>8'd3 ? 2'd3 : hp[hp_slot][1:0];
+    end endgenerate
     reg [1:0] kind [0:MAX_ENEMIES-1];
     reg [1:0] behaviour [0:MAX_ENEMIES-1];
     reg [15:0] cooldown [0:MAX_ENEMIES-1];

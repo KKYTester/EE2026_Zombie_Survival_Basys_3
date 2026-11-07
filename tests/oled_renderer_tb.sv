@@ -37,7 +37,9 @@ module oled_renderer_tb;
         .tint(board.game.frame_tint),.weapon_recoil(board.game.frame_recoil),.weapon_flash(board.game.frame_flash),
         .weapon_reloading(board.game.frame_reloading),.ammo(board.game.frame_ammo),.weapon_drop(board.game.frame_drop),
         .menu_sel(board.game.frame_sel),.cursor_x(board.game.frame_cx),.cursor_y(board.game.frame_cy),
-        .progress(board.game.frame_progress),.over_ready(board.game.frame_over_ready),.pixel_out(expected));
+        .progress(board.game.frame_progress),.over_ready(board.game.frame_over_ready),
+        .hit_flash(board.game.frame_hit),.banner_show(board.game.frame_banner),.banner_top(board.game.frame_banner_top),
+        .pixel_out(expected));
     task build_reference;
         integer c, offset, a, sx, sy, x, y, steps, factor, depth;
         real pi, sv;

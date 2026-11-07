@@ -40,6 +40,8 @@ module tb_two_board_game;
         .uart_tx_pin(s_tx),.uart_rx_pin(1'b1));
 
     integer errors=0, i, b_shots=0;
+    reg watch_p2_hit=0, a_marked=0;
+    always @(posedge clk) if(watch_p2_hit && A.hit_marker) a_marked=1;
     always @(posedge clk) if(A.partner_shot && A.partner_in_game) b_shots=b_shots+1;
     task fail(input [8*64-1:0] msg); begin $display("FAIL: %0s", msg); errors=errors+1; end endtask
     // Task arguments are copies, so buttons are chosen by number.
@@ -115,6 +117,36 @@ module tb_two_board_game;
         if(!(A.partner_visible && B.partner_visible)) fail("partner not visible");
         if(A.partner_tile!==B.player_tile) fail("leader has wrong Player 2 tile");
         $display("zombies: leader %b, follower shows %b", A.local_render_active, B.render_active);
+
+        // 4b. Effects: the leader's own hit turns only its crosshair red; a hit
+        // by the follower's shot turns the follower's crosshair red over the
+        // link; the leader's WAVE CLEAR pause starts the follower's banner;
+        // zombie hit points reach the follower for its health bars.
+        if(B.render_hp!==A.local_render_hp) fail("follower did not receive the zombie hit points");
+        @(negedge clk); force A.shot_hit=1; force A.shot_hit_player=0;
+        @(negedge clk); release A.shot_hit; release A.shot_hit_player;
+        repeat(4) @(posedge clk);
+        if(!A.game.hit_on) fail("leader's hit did not turn its crosshair red");
+        if(B.game.hit_on) fail("leader's hit turned the follower's crosshair red");
+        for(i=0;i<300000 && A.game.hit_on;i=i+1) @(posedge clk);
+        watch_p2_hit=1;
+        @(negedge clk); force A.shot_hit=1; force A.shot_hit_player=1;
+        @(negedge clk); release A.shot_hit; release A.shot_hit_player;
+        for(i=0;i<200000 && !B.game.hit_on;i=i+1) @(posedge clk);
+        if(!B.game.hit_on) fail("follower's hit did not turn its crosshair red");
+        if(a_marked) fail("follower's hit turned the leader's crosshair red");
+        watch_p2_hit=0;
+        force A.game.wave_clear=1;
+        repeat(4) @(posedge clk);
+        if(!A.game.banner_live) fail("leader's WAVE CLEAR banner did not start");
+        for(i=0;i<200000 && !B.game.banner_source;i=i+1) @(posedge clk);
+        if(!B.game.banner_source) fail("follower did not see WAVE CLEAR");
+        repeat(4) @(posedge clk);
+        if(!B.game.banner_live) fail("follower's WAVE CLEAR banner did not start");
+        release A.game.wave_clear;
+        for(i=0;i<200000 && B.game.banner_source;i=i+1) @(posedge clk);
+        if(B.game.banner_live) fail("follower banner did not end with the pause");
+        $display("effects: hit markers on the right board, WAVE CLEAR on both, hit points shared");
 
         // 5. Follower's shot and hearts.
         press(2);

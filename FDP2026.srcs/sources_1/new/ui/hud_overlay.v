@@ -4,11 +4,12 @@
 //  - Health: three hearts at the bottom-left (x=2,8,14; y=56..60).
 //    Remaining hearts are red, lost hearts dark grey. With one heart left,
 //    low_blink=1 draws the last heart grey too, so it flashes.
-//  - Crosshair at the viewport centre (48,32), hidden while the map is shown.
+//  - Crosshair at the viewport centre (48,32), hidden while the map is shown;
+//    red while hit_flash is set (this player's shot hit a zombie).
 // With the map overlay on, everything stays left of x=32.
 module hud_overlay(input wire [6:0] px, input wire [5:0] py,
     input wire minimap_mode, input wire [1:0] health, input wire low_blink,
-    input wire [6:0] wave, input wire [6:0] zombies,
+    input wire [6:0] wave, input wire [6:0] zombies, input wire hit_flash,
     input wire [15:0] pixel_in, output reg [15:0] pixel_out);
     localparam HEART=16'hF800, HEART_LOST=16'h4208, TEXT=16'hFFFF;
     wire [6:0] wv=(wave>99) ? 7'd99 : wave;
@@ -77,7 +78,7 @@ module hud_overlay(input wire [6:0] px, input wire [5:0] py,
             if(font_pixel) pixel_out=TEXT;
             if(heart_pixel) pixel_out = heart_full ? HEART : HEART_LOST;
             if(!minimap_mode && ((py==32 && px>=46 && px<=50) ||
-                                (px==48 && py>=30 && py<=34))) pixel_out=TEXT;
+                                (px==48 && py>=30 && py<=34))) pixel_out=hit_flash ? 16'hF800 : TEXT;
         end
     end
 endmodule
