@@ -33,6 +33,7 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
     input wire link_up, input wire two_player,
     input wire [6:0] peer_wave, input wire peer_in_run,
     input wire show_partner,          // p2_addr = the other player's tile (yellow)
+    input wire partner_dead,
     input wire hit_flash,             // red crosshair after a hit
     input wire [6:0] p1_kills, input wire [6:0] p2_kills, input wire you_are_p2,  // 2P end screens
     input wire banner_show, input wire signed [7:0] banner_top,   // WAVE CLEAR sweep
@@ -47,18 +48,21 @@ module pixel_compositor #(parameter STAGE=3, parameter ENABLE_2P=0,
     wire [3:0] p1k_tens,p1k_ones,p2k_tens,p2k_ones;
     wave_digits p1_kill_digits(.value(p1_kills),.tens(p1k_tens),.ones(p1k_ones));
     wave_digits p2_kill_digits(.value(p2_kills),.tens(p2k_tens),.ones(p2k_ones));
+    wire [6:0] own_kills = you_are_p2 ? p2_kills : p1_kills;
     wire [15:0] gun_pixel_data,hud_pixel_data,ammo_pixel_data,map_pixel_data,zombie_pixel_data,play_pixel_data,menu_pixel_data;
     wire [15:0] effects_pixel_data;
     weapon_overlay gun(.px(px),.py(py),.show(!minimap_mode),.recoil(weapon_recoil),.flash(weapon_flash),
         .drop(weapon_drop),.pixel_in(world_pixel),.pixel_out(gun_pixel_data));
     hud_overlay hud(.px(px),.py(py),.minimap_mode(minimap_mode),.health(health),
-        .low_blink(low_blink),.wave(wave),.zombies(remaining),.hit_flash(hit_flash),
+        .low_blink(low_blink),.wave(wave),.kills(own_kills),.hit_flash(hit_flash),
+        .two_player(two_player),
         .pixel_in(gun_pixel_data),.pixel_out(hud_pixel_data));
     ammo_overlay ammo_hud(.px(px),.py(py),.show(!minimap_mode),.ammo(ammo),
         .reloading(weapon_reloading),.pixel_in(hud_pixel_data),.pixel_out(ammo_pixel_data));
     map_display_mux display_mux(.px(px),.py(py),.minimap_mode(minimap_mode),
         .fp_pixel_data(ammo_pixel_data),.map_bits(map_bits),.p1_addr(p1_addr),
         .p2_addr(p2_addr),.player_x(player_x),.player_y(player_y),.player_angle(player_angle),
+        .player_dead(two_player && health==2'd0),.p2_dead(partner_dead),
         .seed(seed),.map_ready(map_ready),
         // The other player's tile, while both boards play the same map.
         .show_p2(show_partner),

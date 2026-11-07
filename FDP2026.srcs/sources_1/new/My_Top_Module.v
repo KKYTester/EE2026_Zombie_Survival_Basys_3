@@ -153,7 +153,11 @@ module My_Top_Module #(
     // Leader: the follower is Player 2 of the shared zombies.
     wire zombie_hit_p2;
     wire partner_in_game = run_leader && peer_in_run && partner_hearts!=2'd0;
+    // From the follower board, the peer is the leader; from the leader board,
+    // the peer's health is tracked locally in partner_hearts.
+    wire teammate_alive_now = follower ? (peer_in_run && peer_health!=2'd0) : partner_in_game;
     (* max_fanout = 32 *) reg partner_in_game_q;
+    (* max_fanout = 32 *) reg teammate_alive_q;
     reg partner_shot;
     wire shot_session_active = follower && playing && peer_in_run;
     reg shot_session_active_q;
@@ -274,6 +278,9 @@ module My_Top_Module #(
         .dying(draw_dying),.fall(draw_fall));
     // Sprite slot 8 is the partner (Q8 coordinates, y down like the zombies).
     wire [8:0] sprite_active = {partner_visible, draw_active};
+    wire partner_dead = partner_visible && peer_health==2'd0;
+    wire [8:0] sprite_dying = {partner_dead, draw_dying};
+    wire [35:0] sprite_fall = {partner_dead ? 4'd15 : 4'd0, draw_fall};
     wire [107:0] sprite_x = {partner_x[15:4], draw_x};
     wire [107:0] sprite_y = {12'd0 - partner_y[15:4], draw_y};
     // Give the player one clock to load a newly published spawn before scan 0.
@@ -298,7 +305,7 @@ module My_Top_Module #(
         .display_bank(display_bank),.scene_valid(scene_valid),
         .camera_x(player_x[15:4]),.camera_y(camera_south),.camera_angle(player_angle[9:0]),
         .facing(2'd0),.active(sprite_active),.zombie_x(sprite_x),.zombie_y(sprite_y),
-        .hp({2'd3, draw_hp}),.dying({1'b0, draw_dying}),.fall({4'd0, draw_fall}),
+        .hp({2'd3, draw_hp}),.dying(sprite_dying),.fall(sprite_fall),
         .pixel_x(pixel_x),.pixel_y(pixel_y),.wall_depth({column_depth,3'b0}),
         .background(wall_pixel),.done(sprites_ready),.pixel(world_pixel));
 
@@ -321,7 +328,7 @@ module My_Top_Module #(
         .link_up(link_up),.peer_state(peer_state),.peer_2p(peer_2p),.peer_leader(peer_leader),
         .peer_token(peer_token),.peer_priority(peer_status[28:13]),.peer_seed(peer_status[44:29]),
         .peer_wave(peer_wave),.peer_in_run(peer_in_run),
-        .teammate_alive(partner_in_game_q),
+        .teammate_alive(teammate_alive_q),
         .shot_available(follower ? (shot_session_active && event_ready) : combat_ready),
         .follow_health(peer_status[101:100]),.follow_remaining(peer_status[108:102]),
         .remaining(remaining),
@@ -365,6 +372,7 @@ module My_Top_Module #(
         enemy_run_q <= enemy_playing && !follower;
         alive_q <= alive;
         partner_in_game_q <= partner_in_game;
+        teammate_alive_q <= !reset && teammate_alive_now;
         partner_shot_q <= partner_shot && partner_in_game;
     end
     // Zombies (1 PLAYER, or the leader of a shared run): Player 2 is the follower.

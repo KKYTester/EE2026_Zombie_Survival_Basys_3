@@ -13,11 +13,13 @@ module map_display_mux(
     input wire [255:0] map_bits, input wire [7:0] p1_addr,p2_addr,
     input wire [7:0] player_x, input wire [7:0] player_y, input wire [9:0] player_angle,
     input wire show_p2,                   // 1 only in a two-player game
+    input wire player_dead, input wire p2_dead,
     input wire [15:0] seed, input wire map_ready,busy,bfs_enabled,
     input wire [2:0] error_code, output reg [15:0] pixel_data);
     // Status ports retained for interface compatibility and a future HUD.
     localparam WALL=16'h4AD1, FLOOR=16'h0841, GREEN=16'h07E0,
-               YELLOW=16'hFFE0, WHITE=16'hFFFF, BLACK=16'h0000;
+               YELLOW=16'hFFE0, WHITE=16'hFFFF, BLACK=16'h0000,
+               DOWNED=16'hA145;
     wire [6:0] mx=px-7'd32;
     wire [7:0] mini_addr={py[5:2],mx[5:2]};
     // Player dot: pixels (sx-1..sx, sy-1..sy) inside the 64x64 picture.
@@ -58,9 +60,9 @@ module map_display_mux(
             else if(!map_ready) pixel_data=BLACK;
             else begin
                 pixel_data=map_bits[mini_addr] ? WALL : FLOOR;
-                if(show_p2 && mini_addr==p2_addr) pixel_data=YELLOW;
-                if(on_dot) pixel_data=GREEN;
-                else if(on_pointer) pixel_data=WHITE;
+                if(show_p2 && mini_addr==p2_addr) pixel_data=p2_dead ? DOWNED : YELLOW;
+                if(on_dot) pixel_data=player_dead ? DOWNED : GREEN;
+                else if(on_pointer && !player_dead) pixel_data=WHITE;
             end
         end
     end
