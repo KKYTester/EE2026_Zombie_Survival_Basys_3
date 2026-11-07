@@ -98,6 +98,7 @@ Bitstream. Program the same bitstream onto every board.
 | SW15 up, then down | Reset to title |
 | Seven-segment display | Map seed; in a 2-player game: own wave (left) and partner wave (right) |
 | LED15 / LED14-12 | Link up / partner's hearts during a 2-player game |
+| LED10 / LED9 | UART or packet error / status sequence gap, latched until reset |
 
 ### One player
 
@@ -130,11 +131,10 @@ Both players are in **one shared game**: the same map, the same zombies.
 6. If the link is lost, the starting board carries on alone and the other
    board ends its run.
 
-The link carries a status word from each board every 20 ms (state, 2-player
-flag, leader flag, game token, start priority, map seed, wave, hearts,
-position, view angle, shot counter; from the starting board also the other
-player's hearts and the zombies left) and, from the starting board during a
-run, the zombie list (eight positions and the active mask). See
+The link carries a CRC-protected status word from each board every 20 ms,
+plus a matching zombie snapshot from the leader during a shared run. Follower
+shots retain their firing pose and are retried until acknowledged. Both
+boards must use the same updated game bitstream. See
 [docs/multiplayer-link.md](docs/multiplayer-link.md).
 
 Menus, generating screen, hearts, ten waves,
@@ -268,6 +268,11 @@ routing, utilization, timing and CDC reports under `build/renderer_hardware/`.
 No board verification is implied by these simulations. See DeveloperGuide.md
 for the current integration results and remaining hardware checks.
 
+Run `./tests/run_priority_one_checks.ps1` for UART and packet regressions,
+two-player spawn distances, shot queue ordering, and a two-board simulation
+that drops shot and acknowledgement packets. The hardware check uses both
+game constraint files and reports hierarchical usage and the worst paths.
+
 Run `./sim/enemy/run.ps1` for enemy lifecycle, combat, two-player host logic,
 wave/reset and legacy sprite regression checks, plus circle tangencies and
 misses, lookahead turns, diagonal BFS against an independent shortest-hop
@@ -300,3 +305,29 @@ asynchronous external inputs requiring board/peripheral review. No bitstream
 was generated and no board test was performed; mouse, OLED and gameplay checks
 on the physical Basys 3 remain outstanding. The routed timing margin is small,
 so repeat implementation checks after further RTL or constraint changes.
+
+### Priority-one validation (7 November 2026)
+
+Vivado 2025.2 routed `My_Top_Module` at 100 MHz with both game constraint
+files. The baseline is `timing-fix` at `7444b0f`; the comparison includes
+the timing, fair spawning and reliable shot changes together.
+
+| Routed metric | Baseline | With fixes |
+|---|---:|---:|
+| Worst setup slack | -2.430 ns | +0.123 ns |
+| Worst hold slack | +0.003 ns | +0.055 ns |
+| Failing setup endpoints | 107 | 0 |
+| Slice LUTs | 17,787 (85.51%) | 15,403 (74.05%) |
+| Slice registers | 11,994 (28.83%) | 8,220 (19.76%) |
+| Block RAM tiles | 1 (2%) | 2.5 (5%) |
+| DSPs | 20 | 21 |
+
+The BFS queues for enemy navigation, map validation and spawn search use
+block RAM. Timing fixes also register session-timer control, weapon requests
+and enemy steering and contact data. No internal timing paths were removed
+from analysis; the routed timing report has no unconstrained internal endpoints.
+
+The 12 enemy simulations, packet and spawn checks, two-board loss and rejoin
+test, and affected gameplay and OLED checks passed. Baseline and final reports
+are in `build/priority_one_baseline/reports/` and `build/priority_one_r4/reports/`.
+Physical board testing remains to be done.

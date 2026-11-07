@@ -38,13 +38,16 @@ endfunction
 // Using the same footprint for planning, steering and reservations prevents
 // corner cutting, head-on swaps and intersecting diagonal trips.
 function [255:0] segment_mask(input [7:0] a, b);
+    reg [15:0] columns,rows;
+    integer row;
     begin
-        segment_mask=0;
-        segment_mask[a]=1; segment_mask[b]=1;
-        if(a[3:0]!=b[3:0] && a[7:4]!=b[7:4]) begin
-            segment_mask[{a[7:4],b[3:0]}]=1;
-            segment_mask[{b[7:4],a[3:0]}]=1;
-        end
+        // A segment reserves the Cartesian product of its endpoint rows and
+        // columns. Decode the two four-bit axes once, rather than performing
+        // up to four separate 256-bit variable writes into the mask.
+        columns=(16'd1 << a[3:0]) | (16'd1 << b[3:0]);
+        rows=(16'd1 << a[7:4]) | (16'd1 << b[7:4]);
+        for(row=0;row<16;row=row+1)
+            segment_mask[row*16 +: 16]=columns & {16{rows[row]}};
     end
 endfunction
 // Probe a footprint directly when only a few queried cells are needed.

@@ -22,6 +22,7 @@ set design_files [list \
     [file join $source_dir multiplayer_link.v] \
     [file join $root_dir FDP2026.srcs sources_1 new demo uart_test_top.v]]
 add_files -fileset sources_1 -norecurse $design_files
+set_property include_dirs [list [file dirname $source_dir]] [get_filesets sources_1]
 add_files -fileset constrs_1 -norecurse \
     [file join $root_dir constraints uart_test.xdc]
 set_property top uart_test_top [get_filesets sources_1]

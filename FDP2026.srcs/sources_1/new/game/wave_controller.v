@@ -16,13 +16,15 @@
 module wave_controller #(
     parameter MAX_ALIVE=8, parameter MAX_WAVE_SIZE=21,
     parameter SPAWN_SHIFT=26, parameter CLEAR_SHIFT=27,
-    parameter MIN_DIST=8, parameter WIN_WAVE=10,
+    parameter MIN_DIST=8, parameter WIN_WAVE=10, parameter TWO_PLAYERS=0,
     parameter ACK_TIMEOUT_SHIFT=12          // give up on a spawn after 2^12 clocks (~41 us)
 )(
     input wire clk, input wire rst,
     input wire play_start, input wire playing,
     input wire [255:0] map_bits, input wire [255:0] occupied,
     input wire [7:0] player_tile,
+    input wire [7:0] player2_tile,
+    input wire player_active, player2_active,
     input wire spawn_ack, input wire enemy_defeated,
     output reg [6:0] wave,
     output reg spawn_req, output reg [7:0] spawn_tile,
@@ -47,16 +49,18 @@ module wave_controller #(
     reg [2:0] state;
     reg [MAX_SHIFT:0] timer;
     reg [6:0] total, spawned, killed;
-    reg finder_start;
+    reg finder_start,prefer_player2;
     wire finder_busy, finder_done, finder_found;
     wire [7:0] finder_tile;
     wire [15:0] random_value;
 
     lfsr16 rng(.clk(clk),.rst(rst),.load(1'b0),.advance(1'b1),
         .seed(16'h0001),.value(random_value));
-    spawn_finder #(.MIN_DIST(MIN_DIST)) finder(
-        .clk(clk),.rst(rst),.start(finder_start),
+    spawn_finder #(.MIN_DIST(MIN_DIST),.TWO_PLAYERS(TWO_PLAYERS)) finder(
+        .clk(clk),.rst(rst || play_start || !playing),.start(finder_start),
         .map_bits(map_bits),.occupied(occupied),.player_tile(player_tile),
+        .player2_tile(player2_tile),.player_active(player_active),.player2_active(player2_active),
+        .prefer_player2(prefer_player2),
         .random_start(random_value[7:0]),.busy(finder_busy),.done(finder_done),
         .found(finder_found),.tile(finder_tile));
 
@@ -96,10 +100,12 @@ module wave_controller #(
             spawn_tile<=0;
             wave_clear<=0;
             finder_start<=0;
+            prefer_player2<=0;
             game_won<=0;
         end else begin
             finder_start<=0;
             if(play_start) begin
+                prefer_player2<=0;
                 state<=W_SPAWN_DELAY;
                 timer<=0;
                 wave<=1;
@@ -116,7 +122,10 @@ module wave_controller #(
                 wave_clear<=0;
                 game_won<=0;
             end else begin
-                if(spawn_accepted) spawned<=spawned+1'b1;
+                if(spawn_accepted) begin
+                    spawned<=spawned+1'b1;
+                    prefer_player2<=~prefer_player2;
+                end
                 if(defeat_accepted) killed<=killed+1'b1;
                 case({spawn_accepted,defeat_accepted})
                     2'b10: alive<=alive+1'b1;

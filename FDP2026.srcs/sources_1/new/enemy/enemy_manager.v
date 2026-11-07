@@ -187,13 +187,14 @@ module enemy_manager #(
                      MOVE_CHECK=4, MOVE_APPLY=5, MOVE_NEXT=6, MOVE_ADVANCE=7,
                      MOVE_CONTACT=8, MOVE_LOOK=9, MOVE_LOOK_WAIT=10,
                      MOVE_PROJECT=11, MOVE_DISTANCE=12, MOVE_SCALE=13,
-                     MOVE_OFFSET=14, MOVE_AIM=15, MOVE_DELTA=16, MOVE_BLEND=17;
+                     MOVE_OFFSET=14, MOVE_AIM=15, MOVE_DELTA=16, MOVE_BLEND=17,
+                     MOVE_EXTEND=18, MOVE_VALIDATE=19;
     reg [4:0] move_state;
     reg [ID_BITS-1:0] move_id, first_move_id;
     wire [ID_BITS-1:0] next_move_id =
         (move_id==MAX_ENEMIES-1) ? {ID_BITS{1'b0}} : move_id+1'b1;
-    reg [7:0] old_tile, target_tile, candidate;
-    reg was_moving;
+    reg [7:0] old_tile, target_tile, candidate,segment_origin,old_look_tile,old_look_base;
+    reg was_moving,old_look_valid,reversing;
     reg [2:0] step_direction;
     reg [2:0] look_direction;
     reg look_valid;
@@ -203,7 +204,6 @@ module enemy_manager #(
     wire field_ready, field_reachable;
     wire [2:0] field_direction;
     reg [7:0] peek_tile;
-    wire [7:0] segment_origin=was_moving ? travel_origin[move_id] : old_tile;
     wire step_diagonal=segment_origin[3:0]!=candidate[3:0] && segment_origin[7:4]!=candidate[7:4];
     wire [7:0] step_side1={segment_origin[7:4],candidate[3:0]};
     wire [7:0] step_side2={candidate[7:4],segment_origin[3:0]};
@@ -219,12 +219,12 @@ module enemy_manager #(
                 (!physical[probe] && !reservations[probe]);
         end
     endfunction
-    wire peek_free=probe_available(peek_tile,segment_origin,candidate,look_reservation[move_id],
-        was_moving,has_look_reservation[move_id],occupied,reserved);
-    wire peek_side1_free=probe_available(peek_side1,segment_origin,candidate,look_reservation[move_id],
-        was_moving,has_look_reservation[move_id],occupied,reserved);
-    wire peek_side2_free=probe_available(peek_side2,segment_origin,candidate,look_reservation[move_id],
-        was_moving,has_look_reservation[move_id],occupied,reserved);
+    wire peek_free=probe_available(peek_tile,segment_origin,candidate,old_look_tile,
+        was_moving,old_look_valid,occupied,reserved);
+    wire peek_side1_free=probe_available(peek_side1,segment_origin,candidate,old_look_tile,
+        was_moving,old_look_valid,occupied,reserved);
+    wire peek_side2_free=probe_available(peek_side2,segment_origin,candidate,old_look_tile,
+        was_moving,old_look_valid,occupied,reserved);
     wire signed [6:0] turn_dot=direction_x(step_direction)*direction_x(field_direction)+
                               direction_y(step_direction)*direction_y(field_direction);
     wire peek_available=field_reachable && neighbor_valid(candidate,field_direction) &&
@@ -252,9 +252,11 @@ module enemy_manager #(
     wire signed [POSITION_BITS+3:0] projected=
         step_direction[2] ? projected_sum/2 : projected_sum;
     // Bounded constant products: no run-time division or wide direction multiply.
-    (* use_dsp="no" *) wire [POSITION_BITS+9:0] scaled_axis=axis_remaining*9'd362+128;
-    wire [POSITION_BITS:0] extension=remaining<LOOKAHEAD ? LOOKAHEAD-remaining : 0;
-    (* use_dsp="no" *) wire [POSITION_BITS+8:0] scaled_extension=extension*8'd181+128;
+    (* use_dsp="yes" *) wire [POSITION_BITS+9:0] scaled_axis=axis_remaining*9'd362+128;
+    localparam integer EXTENSION_BITS=$clog2(LOOKAHEAD+1);
+    wire [POSITION_BITS:0] extension_difference=LOOKAHEAD-remaining;
+    reg [EXTENSION_BITS-1:0] extension;
+    (* use_dsp="yes" *) wire [EXTENSION_BITS+8:0] scaled_extension=extension*8'd181+128;
     wire near_center=(current_x>center_x ? current_x-center_x : center_x-current_x)<=MOVE_STEP &&
                      (current_y>center_y ? current_y-center_y : center_y-current_y)<=MOVE_STEP;
     wire planned_arrival=MOVE_SUBSTEPS==1 ||
@@ -317,11 +319,13 @@ module enemy_manager #(
     wire movement_enabled = playing && map_ready && !combat_locked && !spawn_busy && !spawn_req;
     wire target_changed = TWO_PLAYERS ? !field_ready : player_tile!=target_tile;
     wire [7:0] next_tile = {next_y[COORD_FRAC_BITS +:4],next_x[COORD_FRAC_BITS +:4]};
-    wire apply_move = movement_enabled && !remove_enemy && !target_changed &&
-                      (MOVE_SUBSTEPS==1 || !close_to_player) &&
-                      move_state==MOVE_APPLY && !map_bits[next_tile] &&
+    wire step_valid = (MOVE_SUBSTEPS==1 || !close_to_player) && !map_bits[next_tile] &&
                       segment_has(segment_origin,candidate,next_tile) &&
                       (next_tile==old_tile || !occupied[next_tile]);
+    // Reaching MOVE_APPLY records that the route and tile checks passed.
+    // A goal change on the commit edge ends the sweep after this safe step.
+    // Combat, removal and spawning can still preempt the commit immediately.
+    wire apply_move = move_state==MOVE_APPLY && movement_enabled && !remove_enemy;
     wire tile_changed = next_tile!=old_tile;
     reg arriving;
     wire [7:0] set_tile = apply_move ? next_tile : spawn_tile;
@@ -369,23 +373,30 @@ module enemy_manager #(
                 end
         end
         reg [POSITION_BITS-1:0] contact_dx, contact_dy;
-        reg range_valid;
+        reg [POSITION_BITS-1:0] sample_enemy_x,sample_enemy_y,sample_player_x,sample_player_y;
+        reg [7:0] sample_tile,range_tile;
+        reg sample_valid,range_valid;
         wire [POSITION_BITS:0] contact_distance = {1'b0,contact_dx}+{1'b0,contact_dy};
         // Fractional positions prevent damage before the zombie reaches contact range.
+        // Split slot selection and the distance math across two clocks.
         always @(posedge clk) begin
-            range_valid<=contact_enabled && attack_neighbor_valid && found_contact &&
+            sample_valid<=contact_enabled && attack_neighbor_valid && found_contact &&
                          attack_origin==contact_tile && !map_bits[attack_origin] &&
                          !map_bits[attack_tile] && !remove_enemy && !accept_spawn;
-            contact_dx<=pos_x[contact_id]>contact_x ?
-                        pos_x[contact_id]-contact_x : contact_x-pos_x[contact_id];
-            contact_dy<=pos_y[contact_id]>contact_y ?
-                        pos_y[contact_id]-contact_y : contact_y-pos_y[contact_id];
-            if(!contact_enabled) range_valid<=0;
+            sample_enemy_x<=pos_x[contact_id]; sample_enemy_y<=pos_y[contact_id];
+            sample_player_x<=contact_x; sample_player_y<=contact_y;
+            sample_tile<=attack_origin;
+            range_valid<=sample_valid && contact_enabled && !remove_enemy && !accept_spawn;
+            range_tile<=sample_tile;
+            contact_dx<=sample_enemy_x>sample_player_x ?
+                        sample_enemy_x-sample_player_x : sample_player_x-sample_enemy_x;
+            contact_dy<=sample_enemy_y>sample_player_y ?
+                        sample_enemy_y-sample_player_y : sample_player_y-sample_enemy_y;
         end
         wire contact_in_range = MOVE_SUBSTEPS==1 ?
             (attack_neighbor_valid && attack_origin==contact_tile &&
              !map_bits[attack_origin] && !map_bits[attack_tile] && occupied[attack_tile]) :
-            (range_valid && contact_distance<=(33'd1 << COORD_FRAC_BITS));
+            (range_valid && range_tile==contact_tile && contact_distance<=(33'd1 << COORD_FRAC_BITS));
         assign contact_hits[player_index]=hit;
 
         wire [7:0] contact_neighbor=neighbor_tile(contact_tile,attack_dir[2:0]);
@@ -419,12 +430,11 @@ module enemy_manager #(
         end
     end endgenerate
 
-    wire [255:0] previous_reservation=was_moving ?
-        segment_mask(travel_origin[move_id],travel_destination[move_id]) |
-        (has_look_reservation[move_id] ?
-         segment_mask(travel_destination[move_id],look_reservation[move_id]) : 256'd0) : 256'd0;
+    wire [255:0] current_segment_mask=segment_mask(segment_origin,candidate);
+    wire [255:0] previous_reservation=was_moving ? current_segment_mask |
+        (old_look_valid ? segment_mask(old_look_base,old_look_tile) : 256'd0) : 256'd0;
     wire [255:0] next_reservation=(!arriving && MOVE_SUBSTEPS>1) ?
-        segment_mask(segment_origin,candidate) |
+        current_segment_mask |
         (look_valid ? segment_mask(candidate,look_tile) : 256'd0) : 256'd0;
     wire [255:0] removed_reservation=segment_mask(travel_origin[remove_id],travel_destination[remove_id]) |
         (has_look_reservation[remove_id] ?
@@ -434,10 +444,12 @@ module enemy_manager #(
         if(rst || clear || !playing || !map_ready) begin
             move_state<=MOVE_IDLE; move_id<=0; first_move_id<=0; target_tile<=0;
             old_tile<=0; candidate<=0; look_valid<=0; arriving<=0;
+            segment_origin<=0; old_look_tile<=0; old_look_base<=0;
+            old_look_valid<=0; reversing<=0;
             look_direction<=0; look_tile<=0; peek_tile<=0;
             steer_x<=0; steer_y<=0; steer_dx<=0; steer_dy<=0;
             velocity_x<=0; velocity_y<=0; along_x<=0; along_y<=0;
-            axis_remaining<=0; remaining<=0; offset<=0; offset_direction<=0;
+            axis_remaining<=0; remaining<=0; extension<=0; offset<=0; offset_direction<=0;
             current_x<=0; current_y<=0; next_x<=0; next_y<=0;
         end else if(move_state!=MOVE_IDLE && target_changed) begin
             move_state<=MOVE_IDLE;
@@ -454,14 +466,34 @@ module enemy_manager #(
                                pos_x[move_id][COORD_FRAC_BITS +: 4]};
                     current_x<=pos_x[move_id]; current_y<=pos_y[move_id];
                     was_moving<=moving[move_id];
+                    segment_origin<=moving[move_id] ? travel_origin[move_id] :
+                        {pos_y[move_id][COORD_FRAC_BITS +: 4],pos_x[move_id][COORD_FRAC_BITS +: 4]};
+                    old_look_tile<=look_reservation[move_id];
+                    old_look_base<=travel_destination[move_id];
+                    old_look_valid<=has_look_reservation[move_id];
+                    reversing<=0;
                     if(moving[move_id]) begin
                         candidate<=travel_destination[move_id];
                         step_direction<=travel_direction[move_id];
-                        move_state<=MOVE_CHECK;
+                        move_state<=TWO_PLAYERS ? MOVE_LOOKUP : MOVE_CHECK;
                     end else move_state<=MOVE_LOOKUP;
                 end else move_state<=MOVE_NEXT;
                 MOVE_LOOKUP: move_state<=MOVE_PLAN;
-                MOVE_PLAN: if(field_reachable) begin
+                MOVE_PLAN: if(TWO_PLAYERS && was_moving) begin
+                    // Reuse the owned footprint to turn back. Before crossing
+                    // into the destination tile, any changed arrow can send
+                    // us back to the origin. After crossing, reverse when the
+                    // new route leads back along this segment.
+                    if(field_reachable &&
+                       ((old_tile==segment_origin && field_direction!=step_direction) ||
+                        (old_tile==candidate && field_direction==(step_direction ^ 3'd1)))) begin
+                        candidate<=segment_origin;
+                        segment_origin<=candidate;
+                        step_direction<=step_direction ^ 3'd1;
+                        reversing<=1;
+                    end
+                    move_state<=MOVE_CHECK;
+                end else if(field_reachable) begin
                     step_direction<=field_direction;
                     candidate<=neighbor_tile(old_tile,field_direction);
                     move_state<=MOVE_CHECK;
@@ -473,7 +505,7 @@ module enemy_manager #(
                     move_state<=MOVE_CONTACT;
                 end
                 MOVE_CONTACT: begin
-                    look_valid<=peek_available && MOVE_SUBSTEPS>1;
+                    look_valid<=peek_available && MOVE_SUBSTEPS>1 && !reversing;
                     look_direction<=field_direction; look_tile<=peek_tile;
                     gap_x1<=current_x>target_x1 ? current_x-target_x1 : target_x1-current_x;
                     gap_y1<=current_y>target_y1 ? current_y-target_y1 : target_y1-current_y;
@@ -494,6 +526,10 @@ module enemy_manager #(
                 end
                 MOVE_SCALE: begin
                     remaining<=step_direction[2] ? scaled_axis>>8 : axis_remaining;
+                    move_state<=MOVE_EXTEND;
+                end
+                MOVE_EXTEND: begin
+                    extension<=remaining<LOOKAHEAD ? extension_difference[EXTENSION_BITS-1:0] : 0;
                     move_state<=MOVE_OFFSET;
                 end
                 MOVE_OFFSET: begin
@@ -533,8 +569,9 @@ module enemy_manager #(
                     next_y<=MOVE_SUBSTEPS==1 || (planned_arrival && !look_valid) ?
                             center_y : $signed({1'b0,current_y})+velocity_y;
                     arriving<=planned_arrival;
-                    move_state<=MOVE_APPLY;
+                    move_state<=MOVE_VALIDATE;
                 end
+                MOVE_VALIDATE: move_state<=step_valid ? MOVE_APPLY : MOVE_NEXT;
                 MOVE_APPLY: move_state<=MOVE_NEXT;
                 MOVE_NEXT: if(next_move_id==first_move_id) begin
                     // A full sweep is done. Rotate priority for the next tick.
@@ -593,8 +630,8 @@ module enemy_manager #(
                 pos_x[move_id]<=next_x;
                 pos_y[move_id]<=next_y;
                 moving[move_id]<=!arriving;
-                if(!was_moving) begin
-                    travel_origin[move_id]<=old_tile;
+                if(!was_moving || reversing) begin
+                    travel_origin[move_id]<=segment_origin;
                     travel_destination[move_id]<=candidate;
                     travel_direction[move_id]<=step_direction;
                 end

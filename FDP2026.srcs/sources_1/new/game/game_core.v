@@ -23,7 +23,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     parameter TINT_SHIFT=25, parameter BLINK_SHIFT=24,
     parameter SPAWN_SHIFT=26, parameter CLEAR_SHIFT=27,
     parameter FLASH_SHIFT=22, parameter RECOIL_SHIFT=23, parameter RELOAD_SHIFT=25,
-    parameter WIN_WAVE=10, parameter USE_SPAWN_OCCUPANCY=0, parameter FRACTIONAL_ENEMIES=0)(
+    parameter WIN_WAVE=10, parameter USE_SPAWN_OCCUPANCY=0, parameter FRACTIONAL_ENEMIES=0,
+    parameter USE_SHOT_BACKPRESSURE=0)(
     input wire clk, input wire rst,
     // Board
     input wire btn_c,                             // raw button, debounced here
@@ -56,6 +57,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     // this player's last heart. Follower: hearts, wave and zombies left come
     // from the leader, which runs the waves.
     input wire teammate_alive,
+    input wire shot_available,
     input wire [1:0] follow_health, input wire [6:0] follow_remaining,
     output wire [6:0] remaining,                  // this board's zombies left (leader/1P)
     input wire [7:0] partner_tile,                // other player's tile ({y,x}, y down)
@@ -133,9 +135,17 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     assign health = follower ? follow_health : local_health;
     assign damage = follower ? (playing_now && follow_health<follow_health_prev) : local_damage;
     wire alive_now = health!=2'd0;   // a downed player waits for the partner
-    wire fire_request = playing_now && alive_now && (press_c || (mouse_left && !mouse_left_prev));
+    wire fire_request = playing_now && alive_now && (!USE_SHOT_BACKPRESSURE || shot_available) &&
+                        (press_c || (mouse_left && !mouse_left_prev));
     // Reload: a new right-click during play (no button, so btnL stays free for movement).
     wire reload_request = playing_now && alive_now && mouse_right && !mouse_right_prev;
+    // Stop link/session qualification at the request register. In particular
+    // the follower token check must not drive the weapon timer in one cycle.
+    reg weapon_fire,weapon_reload;
+    always @(posedge clk) begin
+        weapon_fire<=!rst && fire_request;
+        weapon_reload<=!rst && reload_request;
+    end
     wire weapon_flash, weapon_recoil, weapon_reloading;
     wire [2:0] ammo;
     wire [4:0] weapon_drop;
@@ -162,11 +172,15 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     player_health hearts(.clk(clk),.rst(rst),.play_start(play_start),
         .playing(playing_now),.hit(player_hit && !follower),.health(local_health),.damage(local_damage));
     // Only the host spawns zombies; the Player 2 board shows the host's waves.
-    wave_controller #(.SPAWN_SHIFT(SPAWN_SHIFT),.CLEAR_SHIFT(CLEAR_SHIFT),.WIN_WAVE(WIN_WAVE)) waves(
+    wire [6:0] local_wave;
+    assign wave=follower ? peer_wave : local_wave;
+    wave_controller #(.SPAWN_SHIFT(SPAWN_SHIFT),.CLEAR_SHIFT(CLEAR_SHIFT),.WIN_WAVE(WIN_WAVE),
+        .TWO_PLAYERS(ENABLE_2P)) waves(
         .clk(clk),.rst(rst),.play_start(play_start),.playing(playing_now && !follower),
         .map_bits(published_map),.occupied(USE_SPAWN_OCCUPANCY ? spawn_occupied : zombies),
         .player_tile(player_tile),
-        .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.wave(wave),
+        .player2_tile(partner_tile),.player_active(alive_now),.player2_active(teammate_alive),
+        .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.wave(local_wave),
         .spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_busy(spawn_busy),.alive(alive),
         .remaining(remaining),.wave_clear(wave_clear),.game_won(game_won));
     hud_effects_ctrl #(.TINT_SHIFT(TINT_SHIFT),
@@ -175,7 +189,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .health(health),.tint(tint),.low_blink(low_blink));
     weapon_ctrl #(.FLASH_SHIFT(FLASH_SHIFT),.RECOIL_SHIFT(RECOIL_SHIFT),
         .RELOAD_SHIFT(RELOAD_SHIFT)) weapon(
-        .clk(clk),.rst(rst),.playing(playing_now),.fire(fire_request),.reload(reload_request),
+        .clk(clk),.rst(rst),.playing(playing_now),.fire(weapon_fire),.reload(weapon_reload),
         .flash(weapon_flash),.recoil(weapon_recoil),.shot_fired(shot_fired),
         .ammo(ammo),.reloading(weapon_reloading),.drop(weapon_drop),
         .state(weapon_state),.reload_phase(reload_phase));

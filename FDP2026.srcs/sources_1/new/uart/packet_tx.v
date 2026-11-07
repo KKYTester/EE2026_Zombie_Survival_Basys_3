@@ -1,6 +1,7 @@
 `timescale 1ns / 1ps
-// packet: A5, type, len, payload, checksum (sum of type, len, payload)
-module packet_tx #(parameter MAX_PAYLOAD=16, parameter [7:0] START_BYTE=8'hA5)(
+// Frame: A5, type, len, payload, then CRC-16 (high byte first) or legacy sum.
+module packet_tx #(parameter MAX_PAYLOAD=16, parameter [7:0] START_BYTE=8'hA5,
+    parameter USE_CRC16=0)(
     input wire clk, input wire rst, input wire send,
     input wire [7:0] pkt_type, input wire [7:0] pkt_len,
     input wire [8*MAX_PAYLOAD-1:0] pkt_payload, input wire corrupt_checksum,
@@ -13,6 +14,9 @@ module packet_tx #(parameter MAX_PAYLOAD=16, parameter [7:0] START_BYTE=8'hA5)(
     reg [7:0] type_reg, len_reg, bytes_left, checksum;
     reg [8*MAX_PAYLOAD-1:0] payload_reg;
     reg corrupt_reg;
+    reg [15:0] crc;
+    localparam S_CRC_LOW=3'd6;
+    `include "Packet_CRC.vh"
 
     wire uart_ready = !tx_busy && !tx_start;
     assign busy = state != S_IDLE || tx_start || tx_busy;
@@ -25,6 +29,7 @@ module packet_tx #(parameter MAX_PAYLOAD=16, parameter [7:0] START_BYTE=8'hA5)(
             type_reg <= 0; len_reg <= 0; bytes_left <= 0; checksum <= 0;
             payload_reg <= 0;
             corrupt_reg <= 1'b0;
+            crc <= 16'hffff;
         end else if (state == S_IDLE) begin
             if (send && !busy) begin
                 type_reg <= pkt_type;
@@ -33,6 +38,7 @@ module packet_tx #(parameter MAX_PAYLOAD=16, parameter [7:0] START_BYTE=8'hA5)(
                 payload_reg <= pkt_payload;
                 corrupt_reg <= corrupt_checksum;
                 checksum <= 0;
+                crc <= 16'hffff;
                 state <= S_START;
             end
         end else if (uart_ready) begin
@@ -45,22 +51,30 @@ module packet_tx #(parameter MAX_PAYLOAD=16, parameter [7:0] START_BYTE=8'hA5)(
                 S_TYPE: begin
                     tx_data <= type_reg;
                     checksum <= checksum + type_reg;
+                    crc <= packet_crc_byte(crc,type_reg);
                     state <= S_LEN;
                 end
                 S_LEN: begin
                     tx_data <= len_reg;
                     checksum <= checksum + len_reg;
+                    crc <= packet_crc_byte(crc,len_reg);
                     state <= (len_reg == 0) ? S_CHECK : S_PAYLOAD;
                 end
                 S_PAYLOAD: begin
                     tx_data <= payload_reg[7:0];
                     checksum <= checksum + payload_reg[7:0];
+                    crc <= packet_crc_byte(crc,payload_reg[7:0]);
                     payload_reg <= payload_reg >> 8;
                     bytes_left <= bytes_left - 1'b1;
                     if (bytes_left == 8'd1) state <= S_CHECK;
                 end
                 S_CHECK: begin
-                    tx_data <= corrupt_reg ? ~checksum : checksum;
+                    tx_data <= USE_CRC16 ? (corrupt_reg ? ~crc[15:8] : crc[15:8]) :
+                                           (corrupt_reg ? ~checksum : checksum);
+                    state <= USE_CRC16 ? S_CRC_LOW : S_IDLE;
+                end
+                S_CRC_LOW: begin
+                    tx_data <= crc[7:0];
                     state <= S_IDLE;
                 end
                 default: state <= S_IDLE;

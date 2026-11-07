@@ -8,8 +8,8 @@
 //  3. A starts 2 PLAYERS alone; B (on its title) joins: same map, A leads.
 //  4. Shared zombies: B shows A's zombies and runs none itself; partner
 //     position and visibility cross the link.
-//  5. B's shot reaches A's combat; zombie damage to B is tracked by A and
-//     shown on B.
+//  5. Two B shots survive dropped status and ACK frames, without duplication
+//     or substitution of the newest aiming angle. Leader owns B's damage.
 //  6. B goes down first: the run continues for A. The downed B cannot
 //     restart: BTN-C does nothing, and resetting B makes it rejoin the same
 //     run still with no hearts. Then A goes down: both boards end.
@@ -18,6 +18,7 @@ module tb_two_board_game;
     always #5 clk=~clk;
     reg a_c=0, a_d=0, a_hit=0, b_c=0, b_d=0, b_hit=0, s_c=0;
     reg a_reset=0, b_reset=1;   // real boards never start in lockstep
+    reg block_a_to_b=0,block_b_to_a=0;
     wire a_tx, b_tx, s_tx;
     tri1 a_ps2c, a_ps2d, b_ps2c, b_ps2d, s_ps2c, s_ps2d;
     // GENERATING lasts 2^P_GEN clocks: keep it many link periods long, as on the
@@ -25,22 +26,27 @@ module tb_two_board_game;
     localparam P_DEB=4, P_GEN=17, P_OVER=12;
 `define BOARD_PARAMS .DEBOUNCE_CYCLES(P_DEB),.GEN_SHIFT(P_GEN),.OVER_SHIFT(P_OVER), \
         .SPAWN_SHIFT(10),.CLEAR_SHIFT(12),.MOVE_PERIOD(20000),.CLK_FREQ(1843200), \
-        .LINK_PERIOD(8000),.LINK_TIMEOUT(400000)
+        .LINK_PERIOD(16000),.LINK_TIMEOUT(400000),.FLASH_SHIFT(5),.RECOIL_SHIFT(7),.RELOAD_SHIFT(6)
     My_Top_Module #(`BOARD_PARAMS) A(.clk(clk),.btnC(a_c),.btnU(1'b0),.btnL(1'b0),
         .btnR(1'b0),.btnD(a_d),.sw0(1'b0),.sw13(a_hit),.sw14(1'b0),.sw15(a_reset),
         .ps2_clk(a_ps2c),.ps2_data(a_ps2d),.led(),.JB(),.seg(),.dp(),.an(),
-        .uart_tx_pin(a_tx),.uart_rx_pin(b_tx));
+        .uart_tx_pin(a_tx),.uart_rx_pin(block_b_to_a ? 1'b1 : b_tx));
     My_Top_Module #(`BOARD_PARAMS) B(.clk(clk),.btnC(b_c),.btnU(1'b0),.btnL(1'b0),
         .btnR(1'b0),.btnD(b_d),.sw0(1'b0),.sw13(b_hit),.sw14(1'b0),.sw15(b_reset),
         .ps2_clk(b_ps2c),.ps2_data(b_ps2d),.led(),.JB(),.seg(),.dp(),.an(),
-        .uart_tx_pin(b_tx),.uart_rx_pin(a_tx));
+        .uart_tx_pin(b_tx),.uart_rx_pin(block_a_to_b ? 1'b1 : a_tx));
     My_Top_Module #(`BOARD_PARAMS) S(.clk(clk),.btnC(s_c),.btnU(1'b0),.btnL(1'b0),
         .btnR(1'b0),.btnD(1'b0),.sw0(1'b0),.sw13(1'b0),.sw14(1'b0),.sw15(1'b0),
         .ps2_clk(s_ps2c),.ps2_data(s_ps2d),.led(),.JB(),.seg(),.dp(),.an(),
         .uart_tx_pin(s_tx),.uart_rx_pin(1'b1));
 
     integer errors=0, i, b_shots=0;
-    always @(posedge clk) if(A.partner_shot && A.partner_in_game) b_shots=b_shots+1;
+    reg [9:0] first_angle,second_angle;
+    always @(posedge clk) if(A.partner_shot && A.partner_in_game) begin
+        if(b_shots==0) first_angle=A.partner_shot_angle;
+        if(b_shots==1) second_angle=A.partner_shot_angle;
+        b_shots=b_shots+1;
+    end
     task fail(input [8*64-1:0] msg); begin $display("FAIL: %0s", msg); errors=errors+1; end endtask
     // Task arguments are copies, so buttons are chosen by number.
     // 0 A-C, 1 A-D, 2 B-C, 3 B-D, 4 S-C, 5 A-C+B-C together, 6 A-D+B-D together.
@@ -116,10 +122,27 @@ module tb_two_board_game;
         if(A.partner_tile!==B.player_tile) fail("leader has wrong Player 2 tile");
         $display("zombies: leader %b, follower shows %b", A.local_render_active, B.render_active);
 
-        // 5. Follower's shot and hearts.
+        // 5. Follower fires twice during a short packet blackout. Both shots
+        // keep their original pose even after turning. Block the return path
+        // so the first accepted event is resent until a valid ACK gets back.
+        block_b_to_a=1;
+        force B.player_angle=32'd511;
         press(2);
-        repeat(60000) @(posedge clk);
-        if(b_shots<1) fail("follower's shot did not reach the leader");
+        repeat(500) @(posedge clk);
+        force B.player_angle=32'd777;
+        press(2);
+        force B.player_angle=32'd900;
+        repeat(40000) @(posedge clk);
+        if(b_shots!=0 || B.shots.count!=2) fail("shots did not queue during packet loss");
+        block_a_to_b=1; block_b_to_a=0;
+        repeat(75000) @(posedge clk);
+        if(b_shots!=1 || B.shots.count!=2) fail("lost ACK caused duplicate or retired a shot");
+        block_a_to_b=0;
+        repeat(120000) @(posedge clk);
+        if(b_shots!=2 || B.shots.count!=0) fail("retry did not deliver exactly two shots");
+        if(first_angle!=511 || second_angle!=777) fail("retry used live pose instead of firing pose");
+        if(A.link_gaps==0) fail("missing status packets were not detected");
+        release B.player_angle;
         // Zombies may also reach B during the test, so check the hearts went
         // down and that both boards agree on the count.
         hit_b(1);
@@ -145,6 +168,7 @@ module tb_two_board_game;
         if(B.game_state!=3) fail("reset B did not rejoin the run");
         if(B.game_token!==A.game_token) fail("reset B joined a different run");
         if(B.health!==0) fail("reset B came back with hearts (respawn exploit)");
+        if(b_shots!=2) fail("reset of the follower created an extra shot");
         if(A.game_state!=3 || A.health==0) fail("A's run was disturbed by B's reset");
         $display("downed B after reset: state %0d, hearts %0d, A hearts %0d", B.game_state, B.health, A.health);
         // A goes down too: the run ends on both boards.

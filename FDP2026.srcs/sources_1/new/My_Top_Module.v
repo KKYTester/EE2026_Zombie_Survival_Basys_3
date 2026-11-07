@@ -83,13 +83,15 @@ module My_Top_Module #(
         .clk(clk),.rst(reset),.switch_in(sw13),.flipped(test_hit));
 
     // ---------------- Two-board link ----------------
-    // Status word (14 bytes, both boards): state[2:0], 2-player run[3],
+    // Status word (22 bytes, both boards): state[2:0], 2-player run[3],
     // leader[4], game token[12:5], start priority[28:13], map seed[44:29],
     // wave[51:45], hearts[53:52], position x[69:54] and y[85:70] (north-up
-    // Q4.12 tiles), view angle[95:86], shot counter[99:96], leader only:
-    // follower's hearts[101:100] and zombies left[108:102].
-    // Zombie word (25 bytes, leader during a shared run): x[95:0] and
-    // y[191:96] (eight Q4.8 positions, y down), active mask[199:192].
+    // Q4.12 tiles), view angle[95:86], diagnostic shot count[99:96],
+    // follower's hearts[101:100] and zombies left[108:102] from the leader.
+    // Queued follower shot: valid[112], ID[120:113], X[136:121], Y[152:137],
+    // angle[162:153]. Leader's last accepted event ID is in [170:163].
+    // Zombie word (26 bytes): x[95:0], y[191:96] (Q4.8, y down),
+    // active mask[199:192], game token[207:200].
     wire two_player, leader;
     wire [7:0] game_token;
     wire [15:0] start_priority;
@@ -99,24 +101,31 @@ module My_Top_Module #(
     reg [1:0] partner_hearts;          // leader: the follower's hearts
     wire [7:0] local_render_active;
     wire [95:0] local_render_x, local_render_y;
-    wire [111:0] local_status = {3'd0, remaining, partner_hearts, shot_count,
-                                 player_angle[9:0], player_y[15:0], player_x[15:0],
-                                 health, wave, active_seed, start_priority,
-                                 game_token, leader, two_player, game_state};
-    wire [111:0] peer_status;
-    wire [199:0] peer_zombies;
+    wire event_ready,event_valid;
+    wire [7:0] event_id;
+    wire [15:0] event_x,event_y;
+    wire [9:0] event_angle;
+    reg [7:0] partner_shot_ack;
+    reg [15:0] partner_shot_x,partner_shot_y;
+    reg [9:0] partner_shot_angle;
+    wire combat_ready,combat_ready_p2;
+    wire [175:0] local_status;
+    wire [175:0] peer_status;
+    wire [207:0] peer_zombies;
+    wire [7:0] link_errors,link_gaps;
     wire peer_status_valid, link_up;
     wire run_leader = two_player && leader;      // runs the shared zombies
     wire follower = two_player && !leader;       // shows the leader's zombies
     peer_link #(.CLK_FREQ(CLK_FREQ),.PERIOD_CYCLES(LINK_PERIOD),
-        .TIMEOUT_CYCLES(LINK_TIMEOUT),.STATUS_BYTES(14),.EXTRA_BYTES(25)) link(
+        .TIMEOUT_CYCLES(LINK_TIMEOUT),.STATUS_BYTES(22),.EXTRA_BYTES(26)) link(
         .clk(clk),.rst(reset),.uart_rx_pin(uart_rx_pin),.uart_tx_pin(uart_tx_pin),
         .local_status(local_status),
         .send_extra(run_leader && playing),
-        .local_extra({local_render_active, local_render_y, local_render_x}),
+        .local_extra({game_token,local_render_active, local_render_y, local_render_x}),
         .peer_status(peer_status),.peer_status_valid(peer_status_valid),
         .peer_extra(peer_zombies),.peer_extra_valid(),
-        .link_up(link_up),.packet_error(),.frame_error());
+        .link_up(link_up),.packet_error(),.frame_error(),
+        .packet_error_count(link_errors),.sequence_gap_count(link_gaps));
     wire [2:0] peer_state = peer_status[2:0];
     wire peer_2p = peer_status[3];
     wire peer_leader = peer_status[4];
@@ -132,26 +141,42 @@ module My_Top_Module #(
     wire [15:0] partner_x = peer_status[69:54];
     wire [15:0] partner_y = peer_status[85:70];
     wire [7:0] partner_tile = {4'd15 - partner_y[15:12], partner_x[15:12]};
-    wire [9:0] partner_angle = peer_status[95:86];
 
     // Leader: the follower is Player 2 of the shared zombies.
     wire zombie_hit_p2;
-    reg [3:0] partner_shots_seen;
-    reg partner_shots_synced, partner_shot;
+    wire partner_in_game = run_leader && peer_in_run && partner_hearts!=2'd0;
+    (* max_fanout = 32 *) reg partner_in_game_q;
+    reg partner_shot;
+    wire shot_session_active = follower && playing && peer_in_run;
+    reg shot_session_active_q;
+    always @(posedge clk) shot_session_active_q<=!reset && shot_session_active;
+    assign local_status = {5'd0,partner_shot_ack,event_angle,event_y,event_x,event_id,
+                           event_valid && shot_session_active,
+                           3'd0, remaining, partner_hearts, shot_count,
+                           player_angle[9:0], player_y[15:0], player_x[15:0],
+                           health, wave, active_seed, start_priority,
+                           game_token, leader, two_player, game_state};
+    shot_event_queue shots(.clk(clk),.reset(reset || play_start),
+        .enabled(shot_session_active_q),.fire(shot_fired),
+        .fire_x(player_x[15:0]),.fire_y(player_y[15:0]),.fire_angle(player_angle[9:0]),
+        .acknowledged(peer_status[170:163]),.ready(event_ready),.valid(event_valid),
+        .event_id(event_id),.event_x(event_x),.event_y(event_y),.event_angle(event_angle));
     always @(posedge clk) begin
         partner_shot<=0;
         if(reset || play_start) begin
-            partner_hearts<=2'd3; partner_shots_seen<=0; partner_shots_synced<=0;
+            partner_hearts<=2'd3; partner_shot_ack<=0;
+            partner_shot_x<=0; partner_shot_y<=0; partner_shot_angle<=0;
         end else begin
-            if(peer_status_valid && peer_in_run) begin
-                partner_shots_seen<=peer_status[99:96]; partner_shots_synced<=1;
-                // Each change of the counter is one new shot (shots are far apart).
-                if(partner_shots_synced && peer_status[99:96]!=partner_shots_seen) partner_shot<=1;
+            if(peer_status_valid && partner_in_game && peer_status[112] &&
+               peer_status[120:113]==partner_shot_ack+8'd1 && combat_ready_p2) begin
+                partner_shot<=1;
+                partner_shot_ack<=peer_status[120:113];
+                partner_shot_x<=peer_status[136:121]; partner_shot_y<=peer_status[152:137];
+                partner_shot_angle<=peer_status[162:153];
             end
             if(zombie_hit_p2 && partner_hearts!=0) partner_hearts<=partner_hearts-1'b1;
         end
     end
-    wire partner_in_game = run_leader && peer_in_run && partner_hearts!=2'd0;
 
     // ---------------- Player ----------------
     // Map/UI: x right, y down. Renderer/controller: x east, y north.
@@ -190,7 +215,8 @@ module My_Top_Module #(
     wire [9:0] column_depth;
     wire scene_start, display_bank, scene_valid, sprites_ready;
     // Zombies on screen: this board's own, or the leader's on the follower.
-    wire [7:0] remote_active = peer_zombies[199:192] & {8{peer_in_run}};
+    wire [7:0] remote_active = peer_zombies[199:192] &
+                              {8{peer_in_run && peer_zombies[207:200]==game_token}};
     // Registered (one clock late): keeps the leader flag and the UART data
     // off the long paths into the sprite renderer and the OLED frame capture.
     reg [7:0] render_active;
@@ -235,7 +261,8 @@ module My_Top_Module #(
         .TINT_SHIFT(TINT_SHIFT),.BLINK_SHIFT(BLINK_SHIFT),
         .SPAWN_SHIFT(SPAWN_SHIFT),.CLEAR_SHIFT(CLEAR_SHIFT),
         .FLASH_SHIFT(FLASH_SHIFT),.RECOIL_SHIFT(RECOIL_SHIFT),.RELOAD_SHIFT(RELOAD_SHIFT),
-        .WIN_WAVE(WIN_WAVE),.USE_SPAWN_OCCUPANCY(1),.FRACTIONAL_ENEMIES(1)) game (
+        .WIN_WAVE(WIN_WAVE),.USE_SPAWN_OCCUPANCY(1),.FRACTIONAL_ENEMIES(1),
+        .USE_SHOT_BACKPRESSURE(1)) game (
         .clk(clk),.rst(reset),.btn_c(btnC),.btn_d(press_d),.sw_map(sw0),
         .oled_jb(JB),.seg(),.dp(),.an(),.led(game_led),
         .mouse_x(mouse_x),.mouse_y(mouse_y),.mouse_left(mouse_left),
@@ -247,7 +274,8 @@ module My_Top_Module #(
         .link_up(link_up),.peer_state(peer_state),.peer_2p(peer_2p),.peer_leader(peer_leader),
         .peer_token(peer_token),.peer_priority(peer_status[28:13]),.peer_seed(peer_status[44:29]),
         .peer_wave(peer_wave),.peer_in_run(peer_in_run),
-        .teammate_alive(partner_in_game),
+        .teammate_alive(partner_in_game_q),
+        .shot_available(follower ? (shot_session_active && event_ready) : combat_ready),
         .follow_health(peer_status[101:100]),.follow_remaining(peer_status[108:102]),
         .remaining(remaining),
         .partner_tile(partner_tile),.partner_visible(partner_visible),
@@ -280,7 +308,6 @@ module My_Top_Module #(
     (* max_fanout = 32 *) reg enemy_run_q;
     // Same for the player status inputs, which depend on the 2-player flags.
     (* max_fanout = 32 *) reg alive_q;
-    (* max_fanout = 32 *) reg partner_in_game_q;
     reg partner_shot_q;
     always @(posedge clk) begin
         enemy_clear_q <= enemy_clear || follower;
@@ -300,10 +327,10 @@ module My_Top_Module #(
         .player2_pos_x({20'd0,partner_x[15:4]}),.player2_pos_y({20'd0,12'd0-partner_y[15:4]}),
         .shot_fired(shot_fired),.aim(2'd0),.camera_x(player_x),.camera_y(player_y),
         .camera_angle(player_angle[9:0]),
-        .camera2_x({16'd0,partner_x}),.camera2_y({16'd0,partner_y}),.camera2_angle(partner_angle),
+        .camera2_x({16'd0,partner_shot_x}),.camera2_y({16'd0,partner_shot_y}),.camera2_angle(partner_shot_angle),
         .shot_hit(),.player_hit(zombie_hit),
         .player_active(alive_q),.player2_active(partner_in_game_q),.player2_tile(partner_tile),
-        .shot_fired_p2(partner_shot_q),.aim_p2(2'd0),.shot_ready(),.shot_ready_p2(),
+        .shot_fired_p2(partner_shot_q),.aim_p2(2'd0),.shot_ready(combat_ready),.shot_ready_p2(combat_ready_p2),
         .shot_hit_player(),.player_hit_p2(zombie_hit_p2),.active(local_render_active),
         .render_x(local_render_x),.render_y(local_render_y),.spawn_occupied(spawn_occupied),.read_id(3'd0),
         .read_active(),.read_x(),.read_y(),.read_hp(),.read_type(),.read_state(),.read_cooldown());
@@ -317,10 +344,11 @@ module My_Top_Module #(
     seven_seg_hex board_display(.clk(clk),.rst(reset),.value(seg_value),
         .seg(seg),.dp(dp),.an(an));
     // LED15 link up, LED14-12 partner hearts (2-player game), LED11 map busy,
-    // LED3-1 map error code, LED0 map ready.
+    // LED10 packet/frame error, LED9 missed status sequence, LED3-1 map error
+    // code, LED0 map ready.
     wire [2:0] peer_hearts = !same_game ? 3'b000 :
                              peer_health==2'd3 ? 3'b111 :
                              peer_health==2'd2 ? 3'b011 :
                              peer_health==2'd1 ? 3'b001 : 3'b000;
-    assign led = {link_up, peer_hearts, game_led[15], 7'd0, error_code, map_ready};
+    assign led = {link_up, peer_hearts, game_led[15], |link_errors, |link_gaps, 5'd0, error_code, map_ready};
 endmodule
