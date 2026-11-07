@@ -13,7 +13,7 @@ boards with the updated bitstream; the earlier game protocol is incompatible.
 
 | Type | Length | Payload | Rate |
 |---|---:|---|---|
-| `30` STATUS | 25 | Sequence byte, 24 status bytes | Every 20 ms from each board |
+| `30` STATUS | 28 | Sequence byte, 27 status bytes | Every 20 ms from each board |
 | `31` ZOMBIES | 30 | Same sequence byte, 29 zombie bytes | After the leader's STATUS during a shared run |
 
 The two payloads are sampled together. The receiver accepts a zombie update
@@ -47,6 +47,9 @@ counted separately and latched on LED9 and LED10 respectively until reset.
 | `[170:163]` | Leader only: most recently accepted follower shot ID |
 | `[171]`, `[173:172]` | Leader only: wave-clear pause and follower hit counter |
 | `[182:176]`, `[189:183]` | Leader only: P1 and P2 kill scores |
+| `[199:192]`, `[207:200]` | Leader only: health pack and magazine tile IDs |
+| `[208]`, `[209]` | Leader only: health pack and magazine active flags |
+| `[213:210]` | Leader only: follower's magazine pickup count, modulo 16 |
 
 ## Zombie word (leader to follower)
 
@@ -84,10 +87,10 @@ follower resumes after the leader's retained ACK, without replaying an old
 shot. If the FIFO is full, the weapon does not spend a round until a new fire
 press can be accepted. Queued shots are cleared on leaving the shared run.
 
-Zombies follow the shortest walkable route to a living player. The shared field
-rebuilds when a living player changes tiles or goes down. Each movement update
-checks the route for the zombie's current tile and can reverse an ongoing move
-within its reserved footprint.
+Zombies use sight to choose among living players and investigate accepted shots
+within hearing range when neither player is visible. They wander and patrol
+between encounters. Each movement update can reverse an ongoing move within
+its reserved footprint.
 
 Successful spawns alternate which player's side gets priority, using walking
 distance to define the sides. The search prefers at least eight hops from both
@@ -105,9 +108,12 @@ The leader counts the follower's hearts from
 spawn or move zombies; it draws the leader's zombie word and shows the leader's
 wave and zombies-left count. A player with no hearts is frozen; the leader ends
 the run when both are down or the last wave is won, and the follower's run ends
-with the leader's. Both boards draw the other player from its position (sprite
-slot 8 of `zombie_renderer`, `SLOTS=9`, `HAS_ALLY=1`) and as a yellow tile on
-the SW0 map.
+with the leader's. Both boards draw the other player in sprite slot 8 and as a
+yellow tile on the SW0 map. Slots 9 and 10 draw the shared health pack and
+magazine. The leader places and awards pickups. A health pack restores one
+heart to a living, injured player. A magazine adds one round of capacity up
+to nine and refills it. The follower applies any missed magazine upgrades
+from the leader's count when it receives status for the active run.
 
 The older host/client `multiplayer_link` module remains in the source tree
 with its own testbench but is not used by `My_Top_Module`.

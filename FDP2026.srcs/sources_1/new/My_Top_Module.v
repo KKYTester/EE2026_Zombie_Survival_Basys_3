@@ -85,7 +85,7 @@ module My_Top_Module #(
         .clk(clk),.rst(reset),.switch_in(sw13),.flipped(test_hit));
 
     // ---------------- Two-board link ----------------
-    // Status word (24 bytes, both boards): state[2:0], 2-player run[3],
+    // Status word (27 bytes, both boards): state[2:0], 2-player run[3],
     // leader[4], game token[12:5], start priority[28:13], map seed[44:29],
     // wave[51:45], hearts[53:52], position x[69:54] and y[85:70] (north-up
     // Q4.12 tiles), view angle[95:86], diagnostic shot count[99:96],
@@ -95,6 +95,9 @@ module My_Top_Module #(
     // UI (leader / 1P): WAVE CLEAR pause[171], count of the follower's shots
     // that hit[173:172], kills by P1 (leader)[182:176] and P2 (follower)
     // [189:183] for the end screens; [175:174] and [191:190] spare.
+    // Pickups (leader / 1P): health tile[199:192], magazine tile[207:200],
+    // health valid[208], magazine valid[209], count of magazines taken by the
+    // follower[213:210]; [215:214] spare.
     // Zombie word (29 bytes): x[95:0], y[191:96] (Q4.8, y down),
     // active mask[199:192], game token[207:200], hit points[223:208]
     // (2 bits per zombie, for the health bars).
@@ -121,15 +124,17 @@ module My_Top_Module #(
     reg [15:0] partner_shot_x,partner_shot_y;
     reg [9:0] partner_shot_angle;
     wire combat_ready,combat_ready_p2;
-    wire [191:0] local_status;
-    wire [191:0] peer_status;
+    wire [215:0] local_status;
+    wire [215:0] peer_status;
+    wire [17:0] pickups;               // {mag valid, health valid, mag tile, health tile}
+    reg [3:0] p2_mags;                 // leader: magazines taken by the follower
     wire [231:0] peer_zombies;
     wire [7:0] link_errors,link_gaps;
     wire peer_status_valid, link_up;
     wire run_leader = two_player && leader;      // runs the shared zombies
     wire follower = two_player && !leader;       // shows the leader's zombies
     peer_link #(.CLK_FREQ(CLK_FREQ),.PERIOD_CYCLES(LINK_PERIOD),
-        .TIMEOUT_CYCLES(LINK_TIMEOUT),.STATUS_BYTES(24),.EXTRA_BYTES(29)) link(
+        .TIMEOUT_CYCLES(LINK_TIMEOUT),.STATUS_BYTES(27),.EXTRA_BYTES(29)) link(
         .clk(clk),.rst(reset),.uart_rx_pin(uart_rx_pin),.uart_tx_pin(uart_tx_pin),
         .local_status(local_status),
         .send_extra(run_leader && playing),
@@ -163,7 +168,8 @@ module My_Top_Module #(
     wire shot_session_active = follower && playing && peer_in_run;
     reg shot_session_active_q;
     always @(posedge clk) shot_session_active_q<=!reset && shot_session_active;
-    assign local_status = {2'd0, kills_p2, kills_p1, 2'd0, p2_hits, wave_clear_now,
+    assign local_status = {2'd0, p2_mags, pickups[17:16], pickups[15:0],
+                           2'd0, kills_p2, kills_p1, 2'd0, p2_hits, wave_clear_now,
                            partner_shot_ack,event_angle,event_y,event_x,event_id,
                            event_valid && shot_session_active,
                            3'd0, remaining, partner_hearts, shot_count,
@@ -191,6 +197,22 @@ module My_Top_Module #(
                                    : (shot_hit && !shot_hit_player);
         end
     end
+    // The leader counts P2's pickups. The follower catches up one magazine at
+    // a time after a status gap or a reset that rejoins the same run.
+    wire p2_heal, p2_mag;
+    reg [3:0] p2_mags_seen;
+    reg follow_mag;
+    always @(posedge clk) begin
+        if(reset || play_start) begin p2_mags<=0; p2_mags_seen<=0; follow_mag<=0; end
+        else begin
+            if(p2_mag) p2_mags<=p2_mags+1'b1;
+            follow_mag<=0;
+            if(shot_session_active_q && peer_status[213:210]!=p2_mags_seen) begin
+                p2_mags_seen<=p2_mags_seen+1'b1;
+                follow_mag<=1;
+            end
+        end
+    end
     // Kill scores: counted where the shots are judged (leader / 1P), reset at
     // the start of each run, kept for the end screens; the follower shows the
     // leader's counts from the status word.
@@ -215,6 +237,8 @@ module My_Top_Module #(
                 partner_shot_angle<=peer_status[162:153];
             end
             if(zombie_hit_p2 && partner_hearts!=0) partner_hearts<=partner_hearts-1'b1;
+            else if(p2_heal && partner_hearts!=0 && partner_hearts!=2'd3)
+                partner_hearts<=partner_hearts+1'b1;       // P2 took a health pickup
         end
     end
 
@@ -283,9 +307,11 @@ module My_Top_Module #(
         .draw_active(draw_active),.draw_x(draw_x),.draw_y(draw_y),.draw_hp(draw_hp),
         .dying(draw_dying),.fall(draw_fall));
     // Sprite slot 8 is the partner (Q8 coordinates, y down like the zombies).
-    wire [8:0] sprite_active = {partner_visible, draw_active};
-    wire [107:0] sprite_x = {partner_x[15:4], draw_x};
-    wire [107:0] sprite_y = {12'd0 - partner_y[15:4], draw_y};
+    // Slots 9 and 10 are the health and magazine pickups (tile centres).
+    wire [10:0] sprite_active = {pickups[17] && playing, pickups[16] && playing,
+                                 partner_visible, draw_active};
+    wire [131:0] sprite_x = {pickups[11:8],8'h80, pickups[3:0],8'h80, partner_x[15:4], draw_x};
+    wire [131:0] sprite_y = {pickups[15:12],8'h80, pickups[7:4],8'h80, 12'd0 - partner_y[15:4], draw_y};
     // Give the player one clock to load the spawn before scan 0 and keep
     // map-state decoding off the enemy movement and damage paths.
     (* max_fanout = 32 *) reg map_valid_delayed=0;
@@ -304,13 +330,13 @@ module My_Top_Module #(
     // Q12 north-up player coordinates become Q8 south-down enemy coordinates.
     wire [11:0] camera_south = 12'd0-player_y[15:4];
     zombie_renderer #(.USE_CAMERA_POSE(1),.FOCAL_X(83),.FOCAL_Y(64),
-        .SLOTS(9),.HAS_ALLY(1)) sprites(
+        .SLOTS(11),.HAS_ALLY(1),.PICKUP_SLOTS(2)) sprites(
         .clk(clk),.reset(renderer_reset),.prepare(scene_start),
         .display_bank(display_bank),.scene_valid(scene_valid),
         .camera_x(player_x[15:4]),.camera_y(camera_south),.camera_angle(player_angle[9:0]),
         .facing(2'd0),.active(sprite_active),.zombie_x(sprite_x),.zombie_y(sprite_y),
-        .hp({2'd3, draw_hp}),.dying({1'b0, draw_dying}),.fall({4'd0, draw_fall}),
-        .winding_up({1'b0,render_windup}),
+        .hp({6'b111111, draw_hp}),.dying({3'b000, draw_dying}),.fall({12'd0, draw_fall}),
+        .winding_up({3'b000,render_windup}),
         .pixel_x(pixel_x),.pixel_y(pixel_y),.wall_depth({column_depth,3'b0}),
         .background(wall_pixel),.done(sprites_ready),.pixel(world_pixel));
 
@@ -339,6 +365,9 @@ module My_Top_Module #(
         .remaining(remaining),
         .follow_wave_clear(peer_status[171]),.wave_clear_out(wave_clear_now),
         .hit_marker(hit_marker),
+        .partner_hurt(partner_hearts!=2'd3),
+        .follow_pickups({peer_status[209:208], peer_status[207:192]} & {18{peer_in_run}}),
+        .follow_mag(follow_mag),.pickups(pickups),.p2_heal(p2_heal),.p2_mag(p2_mag),
         .p1_kills(follower ? peer_status[182:176] : kills_p1),
         .p2_kills(follower ? peer_status[189:183] : kills_p2),
         .partner_tile(partner_tile),.partner_visible(partner_visible),

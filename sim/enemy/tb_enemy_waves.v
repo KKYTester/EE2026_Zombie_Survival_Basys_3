@@ -11,7 +11,7 @@ module tb_enemy_waves;
     wire [6:0] wave,remaining;
     wire [5:0] alive;
     wire shot_fired, shot_hit, player_hit;
-    wire [2:0] ammo;
+    wire [3:0] ammo;
     wire [1:0] weapon_state, health;
     integer i,cycles,spawns=0,kills=0,moves=0,live_count;
     integer simultaneous=0, combat_hits=0, kills_before_restart;
@@ -32,11 +32,11 @@ module tb_enemy_waves;
         .occupied(occupied),.active(active),.read_id(3'd0),.read_active(),
         .read_x(),.read_y(),.read_hp(),.read_type(),.read_state(),.read_cooldown());
     weapon_ctrl #(.FLASH_SHIFT(3),.RECOIL_SHIFT(6),.RELOAD_SHIFT(5)) weapon(
-        .clk(clk),.rst(rst),.playing(playing),.fire(fire),.reload(1'b0),
+        .clk(clk),.rst(rst),.playing(playing),.fire(fire),.reload(1'b0),.upgrade(1'b0),
         .shot_fired(shot_fired),.ammo(ammo),.state(weapon_state),
         .flash(),.recoil(),.reloading(),.drop(),.reload_phase());
     player_health hearts(.clk(clk),.rst(rst),.play_start(start),.playing(playing),
-        .hit(player_hit),.health(health),.damage());
+        .hit(player_hit),.heal(1'b0),.health(health),.damage());
     always @(posedge clk) if(!rst && playing && !start) begin
         if(ack) spawns=spawns+1;
         if(dead) kills=kills+1;

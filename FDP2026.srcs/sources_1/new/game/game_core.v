@@ -65,6 +65,12 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     output wire wave_clear_out,                   // leader/1P: sent to the follower
     input wire hit_marker,                        // pulse: this player's shot hit a zombie
     input wire [6:0] p1_kills, input wire [6:0] p2_kills,   // 2P end-screen scores
+    // Pickups (pickup_manager runs here on the leader / 1P board).
+    input wire partner_hurt,                      // leader: P2 below full hearts
+    input wire [17:0] follow_pickups,             // follower: the leader's pickups
+    input wire follow_mag,                        // follower: pulse, P2 took a magazine
+    output wire [17:0] pickups,                   // {mag valid, health valid, mag tile, health tile}
+    output wire p2_heal, output wire p2_mag,      // leader: P2 took health / a magazine
     input wire [7:0] partner_tile,                // other player's tile ({y,x}, y down)
     input wire partner_visible,                   // draw it on the SW0 map
     output wire two_player, output wire leader,
@@ -152,7 +158,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         weapon_reload<=!rst && reload_request;
     end
     wire weapon_flash, weapon_recoil, weapon_reloading;
-    wire [2:0] ammo;
+    wire [3:0] ammo, ammo_capacity;
     wire [4:0] weapon_drop;
     wire [1:0] weapon_state, reload_phase;
     // Free-running seed source: the time spent on the title screen picks the map.
@@ -174,8 +180,10 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .start_priority(start_priority),.use_peer_seed(use_peer_seed),
         .state(flow_state),.sel(menu_sel),.regenerate(regenerate),.play_start(play_start),
         .progress(progress),.over_ready(over_ready));
+    wire p1_heal, p1_mag;
     player_health hearts(.clk(clk),.rst(rst),.play_start(play_start),
-        .playing(playing_now),.hit(player_hit && !follower),.health(local_health),.damage(local_damage));
+        .playing(playing_now),.hit(player_hit && !follower),.heal(p1_heal),
+        .health(local_health),.damage(local_damage));
     // Only the host spawns zombies; the Player 2 board shows the host's waves.
     wire [6:0] local_wave;
     assign wave=follower ? peer_wave : local_wave;
@@ -188,6 +196,27 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.wave(local_wave),
         .spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_busy(spawn_busy),.alive(alive),
         .remaining(remaining),.wave_clear(wave_clear),.game_won(game_won));
+    // ---------------- Pickups ----------------
+    // One health and one magazine pickup at the start of every wave (the wave
+    // number changes, or the run starts). The follower shows the leader's.
+    reg [6:0] wave_seen; reg start_seen;
+    always @(posedge clk) begin
+        wave_seen <= rst ? 7'd0 : local_wave;
+        start_seen <= !rst && play_start;
+    end
+    wire place_pickups = playing_now && !follower && (start_seen || local_wave!=wave_seen);
+    wire [17:0] local_pickups;
+    pickup_manager pickup_ctrl(.clk(clk),.rst(rst),.playing(playing_now && !follower),
+        .place(place_pickups),.map_bits(published_map),
+        .blocked(USE_SPAWN_OCCUPANCY ? spawn_occupied : zombies),
+        .random(seed_counter[7:0]),
+        .p1_tile(player_tile),.p2_tile(partner_tile),
+        .p1_active(alive_now),.p2_active(teammate_alive),
+        .p1_hurt(local_health!=2'd3),.p2_hurt(partner_hurt),
+        .health_valid(local_pickups[16]),.health_tile(local_pickups[7:0]),
+        .mag_valid(local_pickups[17]),.mag_tile(local_pickups[15:8]),
+        .p1_heal(p1_heal),.p1_mag(p1_mag),.p2_heal(p2_heal),.p2_mag(p2_mag));
+    assign pickups = follower ? follow_pickups : local_pickups;
     hud_effects_ctrl #(.TINT_SHIFT(TINT_SHIFT),
         .BLINK_SHIFT(BLINK_SHIFT)) effects_ctrl(
         .clk(clk),.rst(rst),.playing(playing_now),.damage(damage),
@@ -195,8 +224,9 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     weapon_ctrl #(.FLASH_SHIFT(FLASH_SHIFT),.RECOIL_SHIFT(RECOIL_SHIFT),
         .RELOAD_SHIFT(RELOAD_SHIFT)) weapon(
         .clk(clk),.rst(rst),.playing(playing_now),.fire(weapon_fire),.reload(weapon_reload),
+        .upgrade(follower ? follow_mag : p1_mag),
         .flash(weapon_flash),.recoil(weapon_recoil),.shot_fired(shot_fired),
-        .ammo(ammo),.reloading(weapon_reloading),.drop(weapon_drop),
+        .ammo(ammo),.capacity(ammo_capacity),.reloading(weapon_reloading),.drop(weapon_drop),
         .state(weapon_state),.reload_phase(reload_phase));
     map_system #(.STAGE(STAGE)) core(.clk(clk),.rst(rst),.regenerate(regenerate),
         .seed_in(generator_seed),.published_map(published_map),.p1_addr(p1_addr),
@@ -293,7 +323,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     reg [7:0] frame_zombie_active;
     reg [95:0] frame_zombie_x, frame_zombie_y;
     reg frame_flash,frame_recoil,frame_reloading;
-    reg [2:0] frame_ammo;
+    reg [3:0] frame_ammo, frame_capacity;
+    reg [17:0] frame_pickups;
     reg [4:0] frame_drop;
     reg frame_ready,frame_busy,frame_mode;
     reg [2:0] frame_error;
@@ -316,7 +347,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
             frame_pos_x<=0; frame_pos_y<=0; frame_angle<=0;
             frame_health<=3; frame_wave<=1; frame_remaining<=0; frame_zombies<=0;
             frame_zombie_active<=0; frame_zombie_x<=0; frame_zombie_y<=0;
-            frame_flash<=0; frame_recoil<=0; frame_reloading<=0; frame_ammo<=6; frame_drop<=0;
+            frame_flash<=0; frame_recoil<=0; frame_reloading<=0; frame_ammo<=6; frame_capacity<=6; frame_pickups<=0; frame_drop<=0;
             frame_ready<=0; frame_busy<=1; frame_mode<=0; frame_error<=0;
             frame_screen<=0; frame_sel<=0;
             frame_cx<=48; frame_cy<=40; frame_progress<=0;
@@ -337,6 +368,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
             frame_zombie_active<=zombie_active; frame_zombie_x<=zombie_x; frame_zombie_y<=zombie_y;
             frame_flash<=weapon_flash; frame_recoil<=weapon_recoil;
             frame_reloading<=weapon_reloading; frame_ammo<=ammo; frame_drop<=weapon_drop;
+            frame_capacity<=ammo_capacity; frame_pickups<=pickups;
             frame_seed<=seed; frame_ready<=ready; frame_busy<=busy;
             frame_mode<=switch_sync[1]; frame_error<=error_code;
             frame_screen<=flow_state;
@@ -361,7 +393,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .zombie_tiles(frame_zombies),.tint(frame_tint),
         .zombie_active(frame_zombie_active),.zombie_x(frame_zombie_x),.zombie_y(frame_zombie_y),
         .weapon_recoil(frame_recoil),.weapon_flash(frame_flash),.weapon_reloading(frame_reloading),
-        .ammo(frame_ammo),.weapon_drop(frame_drop),
+        .ammo(frame_ammo),.ammo_capacity(frame_capacity),.pickups(frame_pickups),.weapon_drop(frame_drop),
         .menu_sel(frame_sel),.cursor_x(frame_cx),.cursor_y(frame_cy),
         .progress(frame_progress),.over_ready(frame_over_ready),
         .link_up(frame_link),.two_player(frame_two_player),
@@ -383,7 +415,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .zombie_tiles(frame_zombies),.tint(frame_tint),
         .zombie_active(frame_zombie_active),.zombie_x(frame_zombie_x),.zombie_y(frame_zombie_y),
         .weapon_recoil(frame_recoil),.weapon_flash(frame_flash),.weapon_reloading(frame_reloading),
-        .ammo(frame_ammo),.weapon_drop(frame_drop),
+        .ammo(frame_ammo),.ammo_capacity(frame_capacity),.pickups(frame_pickups),.weapon_drop(frame_drop),
         .menu_sel(frame_sel),.cursor_x(frame_cx),.cursor_y(frame_cy),
         .progress(frame_progress),.over_ready(frame_over_ready),
         .link_up(frame_link),.two_player(frame_two_player),

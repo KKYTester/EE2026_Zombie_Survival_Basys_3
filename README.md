@@ -234,10 +234,14 @@ row-index division on the integrated pixel path.
 - Three player hearts. Losing all hearts ends the game. Clearing all ten waves
   leads to victory after the final between-wave pause. Both end screens wait
   for an input delay and then a new click or btnC returns to the title.
-- A six-round pistol with muzzle flash, recoil, manual reload and automatic
+- A pistol that starts with six rounds, with muzzle flash, recoil, manual reload and automatic
   reload after the last round's recoil. Reload requests during recoil are
   remembered. The five weapon states are READY, FIRING, LOWER, SWAP and RAISE;
   existing status ports are preserved as combinational decodes.
+- One health pack and one magazine are placed per wave when floor space is
+  available. A health pack restores one heart to a living, injured player.
+  A magazine adds one round of capacity up to nine and refills the weapon.
+  Both pickups appear in the first-person view and on the map.
 - One reusable `pixel_compositor` defines the gameplay drawing order:
   world -> weapon -> HUD -> ammo -> map -> zombie dots -> damage tint.
   Outside gameplay, a full-screen menu is selected instead. `game_core` uses
