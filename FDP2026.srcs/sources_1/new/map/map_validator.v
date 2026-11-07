@@ -17,7 +17,7 @@ module map_validator #(parameter CHECK_CONNECTIVITY=1, parameter MAX_CYCLES=4096
     reg [7:0] scan_addr, current;
     reg [1:0] direction;
     reg [255:0] visited;
-    reg [7:0] queue[0:255];
+    (* ram_style="block" *) reg [7:0] queue[0:255];
     reg [8:0] head,tail;
     reg [15:0] elapsed;
     reg boundary_bad;
@@ -29,7 +29,20 @@ module map_validator #(parameter CHECK_CONNECTIVITY=1, parameter MAX_CYCLES=4096
     reg [7:0] neighbour;
     reg [7:0] checked_neighbour;
     reg checked_valid,enqueue_pending;
+    wire bad_spawn=floor_count<2 || p1_addr==p2_addr || map_bits[p1_addr] || map_bits[p2_addr];
+    wire expired=elapsed>=MAX_CYCLES-1;
+    wire queue_seed=state==S_CHECK && !boundary_bad && !bad_spawn;
+    wire queue_push=state==S_ENQUEUE && enqueue_pending && tail<256;
     assign busy=state!=S_IDLE;
+    // Head/tail and visited qualify all data, so this memory needs no reset.
+    // Seed and enqueue share one write port; the read stays synchronous.
+    always @(posedge clk) begin
+        if(CHECK_CONNECTIVITY && !rst && !expired) begin
+            if(queue_seed || queue_push)
+                queue[queue_seed ? 8'd0 : tail[7:0]]<=queue_seed ? p1_addr : checked_neighbour;
+            if(state==S_POP && head!=tail) current<=queue[head[7:0]];
+        end
+    end
     always @* begin
         neighbour=current; neighbour_valid=0;
         case(direction)
@@ -44,12 +57,12 @@ module map_validator #(parameter CHECK_CONNECTIVITY=1, parameter MAX_CYCLES=4096
             state<=S_IDLE; done<=0; passed<=0; error_code<=OK;
             p1_addr<=0; p2_addr<=0; floor_count<=0; reachable_count<=0;
             visited<=0; head<=0; tail<=0; elapsed<=0; boundary_bad<=0;
-            min_sum<=31; max_sum<=0; scan_addr<=0; current<=0; direction<=0;
+            min_sum<=31; max_sum<=0; scan_addr<=0; direction<=0;
             checked_neighbour<=0; checked_valid<=0; enqueue_pending<=0;
         end else begin
             done<=0;
             if (state!=S_IDLE) elapsed<=elapsed+1'b1;
-            if (state!=S_IDLE && elapsed>=MAX_CYCLES-1) begin
+            if (state!=S_IDLE && expired) begin
                 state<=S_IDLE; done<=1; passed<=0; error_code<=TIMEOUT;
             end else case(state)
                 S_IDLE: if(start) begin
@@ -76,13 +89,12 @@ module map_validator #(parameter CHECK_CONNECTIVITY=1, parameter MAX_CYCLES=4096
                 S_CHECK: begin
                     if(boundary_bad) begin
                         error_code<=OPEN_BOUNDARY; done<=1; state<=S_IDLE;
-                    end else if(floor_count<2 || p1_addr==p2_addr ||
-                                map_bits[p1_addr] || map_bits[p2_addr]) begin
+                    end else if(bad_spawn) begin
                         error_code<=BAD_SPAWN; done<=1; state<=S_IDLE;
                     end else if(!CHECK_CONNECTIVITY) begin
                         passed<=1; error_code<=OK; done<=1; state<=S_IDLE;
                     end else begin
-                        visited[p1_addr]<=1; queue[0]<=p1_addr;
+                        visited[p1_addr]<=1;
                         head<=0; tail<=1; reachable_count<=1; state<=S_POP;
                     end
                 end
@@ -92,7 +104,7 @@ module map_validator #(parameter CHECK_CONNECTIVITY=1, parameter MAX_CYCLES=4096
                         error_code<=(reachable_count==floor_count) ? OK : DISCONNECTED;
                         done<=1; state<=S_IDLE;
                     end else begin
-                        current<=queue[head[7:0]]; head<=head+1'b1;
+                        head<=head+1'b1;
                         direction<=0; state<=S_ADDR;
                     end
                 end else state<=S_IDLE;
@@ -110,7 +122,7 @@ module map_validator #(parameter CHECK_CONNECTIVITY=1, parameter MAX_CYCLES=4096
                         if(tail>=256) begin
                             error_code<=TIMEOUT; passed<=0; done<=1; state<=S_IDLE;
                         end else begin
-                            visited[checked_neighbour]<=1; queue[tail[7:0]]<=checked_neighbour;
+                            visited[checked_neighbour]<=1;
                             tail<=tail+1'b1; reachable_count<=reachable_count+1'b1;
                             if(direction==3) state<=S_POP;
                             else begin direction<=direction+1'b1; state<=S_ADDR; end

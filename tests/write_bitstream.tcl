@@ -5,6 +5,7 @@ if {$argc > 0} {
     set root_dir [file dirname [file dirname [file normalize [info script]]]]
 }
 set out_dir [file join $root_dir build renderer_hardware]
+if {$argc > 1} { set out_dir [file normalize [lindex $argv 1]] }
 open_checkpoint [file join $out_dir routed.dcp]
 set setup_path [get_timing_paths -delay_type max -max_paths 1]
 set hold_path [get_timing_paths -delay_type min -max_paths 1]

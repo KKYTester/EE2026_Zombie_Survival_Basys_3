@@ -21,6 +21,7 @@ module enemy_renderer_integration_tb;
         .clk(clk),.reset(reset),.prepare(prepare),.display_bank(bank),.scene_valid(valid),
         .camera_x(12'd1408),.camera_y(12'd1408),.camera_angle(angle[9:0]),
         .facing(2'd0),.active(8'd1),.zombie_x(xs),.zombie_y(ys),
+        .hp(16'hFFFF),.dying(8'd0),.fall(32'd0),
         .pixel_x(7'd48),.pixel_y(6'd32),.wall_depth({depth,3'b0}),
         .background(wall_pixel),.done(sprites_done),.pixel(pixel));
 
@@ -30,7 +31,7 @@ module enemy_renderer_integration_tb;
             @(negedge clk); old_bank=bank; force world.game_tick=1;
             @(negedge clk); release world.game_tick;
             wait(bank!=old_bank);
-            repeat(36) @(negedge clk);
+            repeat(58) @(negedge clk);
         end
     endtask
     initial begin
@@ -39,7 +40,7 @@ module enemy_renderer_integration_tb;
             if(x==0 || x==15 || y==0 || y==15) walls[y*16+x]=1;
         xs[0+:12]=1920; ys[0+:12]=896; // Two cells east and north of the camera.
         repeat(3) @(negedge clk); reset=0;
-        wait(valid); repeat(36) @(negedge clk);
+        wait(valid); repeat(58) @(negedge clk);
         if(pixel!==16'h8816) $fatal(1,"northeast sprite not projected at screen center");
         walls[11*16+6]=1; // Wall between the camera and zombie.
         next_scan;

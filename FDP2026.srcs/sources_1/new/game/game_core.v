@@ -23,7 +23,9 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     parameter TINT_SHIFT=25, parameter BLINK_SHIFT=24,
     parameter SPAWN_SHIFT=26, parameter CLEAR_SHIFT=27,
     parameter FLASH_SHIFT=22, parameter RECOIL_SHIFT=23, parameter RELOAD_SHIFT=25,
-    parameter WIN_WAVE=10, parameter USE_SPAWN_OCCUPANCY=0, parameter FRACTIONAL_ENEMIES=0)(
+    parameter WIN_WAVE=10, parameter USE_SPAWN_OCCUPANCY=0, parameter FRACTIONAL_ENEMIES=0,
+    parameter USE_SHOT_BACKPRESSURE=0,
+    parameter HIT_SHIFT=24)(                      // red crosshair for 2^24 clocks (~0.17 s)
     input wire clk, input wire rst,
     // Board
     input wire btn_c,                             // raw button, debounced here
@@ -52,6 +54,17 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     input wire [7:0] peer_token, input wire [15:0] peer_priority,
     input wire [15:0] peer_seed,
     input wire [6:0] peer_wave, input wire peer_in_run,  // shown on end screens
+    // Shared 2-player run. Leader: teammate_alive keeps the run going after
+    // this player's last heart. Follower: hearts, wave and zombies left come
+    // from the leader, which runs the waves.
+    input wire teammate_alive,
+    input wire shot_available,
+    input wire [1:0] follow_health, input wire [6:0] follow_remaining,
+    output wire [6:0] remaining,                  // this board's zombies left (leader/1P)
+    input wire follow_wave_clear,                 // follower: leader's WAVE CLEAR pause
+    output wire wave_clear_out,                   // leader/1P: sent to the follower
+    input wire hit_marker,                        // pulse: this player's shot hit a zombie
+    input wire [6:0] p1_kills, input wire [6:0] p2_kills,   // 2P end-screen scores
     input wire [7:0] partner_tile,                // other player's tile ({y,x}, y down)
     input wire partner_visible,                   // draw it on the SW0 map
     output wire two_player, output wire leader,
@@ -106,7 +119,8 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     wire damage,tint,low_blink;
     wire wave_clear,game_won;
     wire [5:0] alive;
-    wire [6:0] remaining;
+    wire [1:0] local_health;
+    wire local_damage;
     wire [255:0] zombies = occupied;
     wire playing_now = flow_state==3'd3;
     assign map_ready=ready; assign map_busy=busy; assign active_seed=seed;
@@ -119,9 +133,24 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         mouse_left_prev <= rst ? 1'b0 : mouse_left;
         mouse_right_prev <= rst ? 1'b0 : mouse_right;
     end
-    wire fire_request = playing_now && (press_c || (mouse_left && !mouse_left_prev));
+    // Follower in a shared run: the leader owns waves and this player's hearts.
+    wire follower = two_player && !leader;
+    reg [1:0] follow_health_prev;
+    always @(posedge clk) follow_health_prev <= (rst || play_start) ? 2'd3 : follow_health;
+    assign health = follower ? follow_health : local_health;
+    assign damage = follower ? (playing_now && follow_health<follow_health_prev) : local_damage;
+    wire alive_now = health!=2'd0;   // a downed player waits for the partner
+    wire fire_request = playing_now && alive_now && (!USE_SHOT_BACKPRESSURE || shot_available) &&
+                        (press_c || (mouse_left && !mouse_left_prev));
     // Reload: a new right-click during play (no button, so btnL stays free for movement).
-    wire reload_request = playing_now && mouse_right && !mouse_right_prev;
+    wire reload_request = playing_now && alive_now && mouse_right && !mouse_right_prev;
+    // Stop link/session qualification at the request register. In particular
+    // the follower token check must not drive the weapon timer in one cycle.
+    reg weapon_fire,weapon_reload;
+    always @(posedge clk) begin
+        weapon_fire<=!rst && fire_request;
+        weapon_reload<=!rst && reload_request;
+    end
     wire weapon_flash, weapon_recoil, weapon_reloading;
     wire [2:0] ammo;
     wire [4:0] weapon_drop;
@@ -137,7 +166,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .OVER_SHIFT(OVER_SHIFT)) flow(
         .clk(clk),.rst(rst),.btn_c(press_c),.btn_d(btn_d),.btn_l(1'b0),.btn_r(1'b0),
         .mouse_x(mouse_x),.mouse_y(mouse_y),.mouse_left(mouse_left),.mouse_event(mouse_event),
-        .map_ready(ready),.map_busy(busy),.health_zero(health==2'd0),.game_won(game_won),
+        .map_ready(ready),.map_busy(busy),.health_zero(!alive_now && !teammate_alive),.game_won(game_won),
         .random(seed_counter),.link_up(link_up),
         .peer_state(peer_state),.peer_2p(peer_2p),.peer_leader(peer_leader),
         .peer_token(peer_token),.peer_priority(peer_priority),
@@ -146,13 +175,17 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .state(flow_state),.sel(menu_sel),.regenerate(regenerate),.play_start(play_start),
         .progress(progress),.over_ready(over_ready));
     player_health hearts(.clk(clk),.rst(rst),.play_start(play_start),
-        .playing(playing_now),.hit(player_hit),.health(health),.damage(damage));
+        .playing(playing_now),.hit(player_hit && !follower),.health(local_health),.damage(local_damage));
     // Only the host spawns zombies; the Player 2 board shows the host's waves.
-    wave_controller #(.SPAWN_SHIFT(SPAWN_SHIFT),.CLEAR_SHIFT(CLEAR_SHIFT),.WIN_WAVE(WIN_WAVE)) waves(
-        .clk(clk),.rst(rst),.play_start(play_start),.playing(playing_now),
+    wire [6:0] local_wave;
+    assign wave=follower ? peer_wave : local_wave;
+    wave_controller #(.SPAWN_SHIFT(SPAWN_SHIFT),.CLEAR_SHIFT(CLEAR_SHIFT),.WIN_WAVE(WIN_WAVE),
+        .TWO_PLAYERS(ENABLE_2P)) waves(
+        .clk(clk),.rst(rst),.play_start(play_start),.playing(playing_now && !follower),
         .map_bits(published_map),.occupied(USE_SPAWN_OCCUPANCY ? spawn_occupied : zombies),
         .player_tile(player_tile),
-        .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.wave(wave),
+        .player2_tile(partner_tile),.player_active(alive_now),.player2_active(teammate_alive),
+        .spawn_ack(spawn_ack),.enemy_defeated(enemy_defeated),.wave(local_wave),
         .spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_busy(spawn_busy),.alive(alive),
         .remaining(remaining),.wave_clear(wave_clear),.game_won(game_won));
     hud_effects_ctrl #(.TINT_SHIFT(TINT_SHIFT),
@@ -161,7 +194,7 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .health(health),.tint(tint),.low_blink(low_blink));
     weapon_ctrl #(.FLASH_SHIFT(FLASH_SHIFT),.RECOIL_SHIFT(RECOIL_SHIFT),
         .RELOAD_SHIFT(RELOAD_SHIFT)) weapon(
-        .clk(clk),.rst(rst),.playing(playing_now),.fire(fire_request),.reload(reload_request),
+        .clk(clk),.rst(rst),.playing(playing_now),.fire(weapon_fire),.reload(weapon_reload),
         .flash(weapon_flash),.recoil(weapon_recoil),.shot_fired(shot_fired),
         .ammo(ammo),.reloading(weapon_reloading),.drop(weapon_drop),
         .state(weapon_state),.reload_phase(reload_phase));
@@ -225,6 +258,31 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     assign frame_begin = oled_frame_begin && !frame_begin_prev;
     assign frame_idle = !sending_pixels && !oled_frame_begin;
 
+    // ---------------- Hit marker and WAVE CLEAR sweep ----------------
+    reg [HIT_SHIFT-1:0] hit_count;
+    reg hit_on;
+    always @(posedge clk) begin
+        if(rst || !playing_now) begin hit_on<=0; hit_count<=0; end
+        else if(hit_marker) begin hit_on<=1; hit_count<=0; end
+        else if(hit_on) begin
+            hit_count<=hit_count+1'b1;
+            if(&hit_count) hit_on<=0;
+        end
+    end
+    assign wave_clear_out = wave_clear;
+    wire banner_source = playing_now && (follower ? follow_wave_clear : wave_clear);
+    // Sweep: one row every 2^(CLEAR_SHIFT-7) clocks, top -12 to 64 (76 rows),
+    // so it crosses the screen in about 60% of the WAVE CLEAR pause.
+    localparam BANNER_SHIFT = (CLEAR_SHIFT>8) ? CLEAR_SHIFT-7 : 1;
+    reg [BANNER_SHIFT+6:0] banner_count;
+    always @(posedge clk) begin
+        if(rst || !banner_source) banner_count<=0;
+        else if(banner_count[BANNER_SHIFT+6:BANNER_SHIFT]!=7'd127) banner_count<=banner_count+1'b1;
+    end
+    wire [6:0] banner_rows = banner_count[BANNER_SHIFT+6:BANNER_SHIFT];
+    wire banner_live = banner_source && banner_rows<7'd76;
+    wire signed [7:0] banner_top = $signed({1'b0,banner_rows}) - 8'sd12;
+
     reg [255:0] frame_map;
     reg [7:0] frame_p1,frame_p2,frame_pos_x,frame_pos_y;
     reg [9:0] frame_angle;
@@ -243,6 +301,10 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
     reg frame_sel,frame_tint,frame_blink,frame_over_ready;
     reg frame_link,frame_two_player,frame_peer_in_run,frame_partner;
     reg [6:0] frame_peer_wave;
+    reg frame_hit, frame_banner;
+    reg [6:0] frame_p1_kills, frame_p2_kills;
+    reg frame_you_p2;
+    reg signed [7:0] frame_banner_top;
     reg [6:0] frame_cx; reg [5:0] frame_cy;
     reg [5:0] frame_progress;
     // Related clocks, explicitly constrained in XDC, not asynchronous CDC.
@@ -261,13 +323,17 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
             frame_tint<=0; frame_blink<=0; frame_over_ready<=0;
             frame_link<=0; frame_two_player<=0; frame_peer_in_run<=0; frame_peer_wave<=0;
             frame_partner<=0;
+            frame_hit<=0; frame_banner<=0; frame_banner_top<=-8'sd12;
+            frame_p1_kills<=0; frame_p2_kills<=0; frame_you_p2<=0;
         end else if(oled_frame_begin) begin
+            frame_hit<=hit_on; frame_banner<=banner_live; frame_banner_top<=banner_top;
+            frame_p1_kills<=p1_kills; frame_p2_kills<=p2_kills; frame_you_p2<=follower;
             frame_map<=published_map; frame_p1<=playing_now ? player_tile : p1_addr;
             frame_p2<=partner_tile; frame_partner<=partner_visible && playing_now;
             frame_pos_x<=player_pos_x; frame_pos_y<=player_pos_y; frame_angle<=player_angle;
             frame_health<=health;
-            frame_wave<=wave;
-            frame_remaining<=remaining; frame_zombies<=zombies;
+            frame_wave<=follower ? peer_wave : wave;
+            frame_remaining<=follower ? follow_remaining : remaining; frame_zombies<=zombies;
             frame_zombie_active<=zombie_active; frame_zombie_x<=zombie_x; frame_zombie_y<=zombie_y;
             frame_flash<=weapon_flash; frame_recoil<=weapon_recoil;
             frame_reloading<=weapon_reloading; frame_ammo<=ammo; frame_drop<=weapon_drop;
@@ -300,7 +366,10 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .progress(frame_progress),.over_ready(frame_over_ready),
         .link_up(frame_link),.two_player(frame_two_player),
         .peer_wave(frame_peer_wave),.peer_in_run(frame_peer_in_run),
-        .show_partner(frame_partner),.pixel_out(pixel_data));
+        .show_partner(frame_partner),
+        .hit_flash(frame_hit),.banner_show(frame_banner),.banner_top(frame_banner_top),
+        .p1_kills(frame_p1_kills),.p2_kills(frame_p2_kills),.you_are_p2(frame_you_p2),
+        .pixel_out(pixel_data));
 
     // The course OLED driver omits (95,63); the bridge sends this same composition.
     pixel_compositor #(.STAGE(STAGE),.ENABLE_2P(ENABLE_2P),.SHOW_CURSOR(SHOW_CURSOR),
@@ -319,7 +388,10 @@ module game_core #(parameter STAGE=3, parameter DEBOUNCE_CYCLES=1000000,
         .progress(frame_progress),.over_ready(frame_over_ready),
         .link_up(frame_link),.two_player(frame_two_player),
         .peer_wave(frame_peer_wave),.peer_in_run(frame_peer_in_run),
-        .show_partner(frame_partner),.pixel_out(last_pixel_data));
+        .show_partner(frame_partner),
+        .hit_flash(frame_hit),.banner_show(frame_banner),.banner_top(frame_banner_top),
+        .p1_kills(frame_p1_kills),.p2_kills(frame_p2_kills),.you_are_p2(frame_you_p2),
+        .pixel_out(last_pixel_data));
 
     wire raw_cs,raw_sdin,raw_sclk,raw_dcn;
     Oled_Display oled(.clk(oled_clk),.reset(oled_reset),.frame_begin(oled_frame_begin),

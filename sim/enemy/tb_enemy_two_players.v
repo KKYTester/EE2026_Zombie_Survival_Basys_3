@@ -9,6 +9,8 @@ module tb_enemy_two_players;
     wire [7:0] active;
     integer hits=0, deaths=0, hurt_count1=0, hurt_count2=0;
     reg [1:0] hit_order=0;
+    wire fractional_done;
+    fractional_retarget fractional(.clk(clk),.done(fractional_done));
     always #5 clk=~clk;
     always @(posedge clk) begin
         if(hit) begin hits=hits+1; hit_order={hit_order[0],hit_id}; end
@@ -77,7 +79,71 @@ module tb_enemy_two_players;
         repeat(8) @(negedge clk);
         if(hurt_count1!=1 || hurt_count2!=1)
             $fatal(1,"players did not have independent contact cooldowns");
+        wait(fractional_done);
         $display("TB_ENEMY_TWO_PLAYERS: PASS"); $finish;
     end
     initial begin #200000; $fatal(1,"two-player test timeout"); end
+endmodule
+
+module fractional_retarget(input wire clk,output reg done=0);
+    reg clear=1,tick=0,req=0;
+    reg live1=1,live2=1;
+    reg [7:0] p1=8'h44,p2=8'h49;
+    reg [255:0] walls={256{1'b1}};
+    wire [11:0] x;
+    wire ack;
+    wire [255:0] occupied,reserved;
+    reg [11:0] before_turn;
+    integer i;
+    enemy_manager #(.TWO_PLAYERS(1),.MAX_ENEMIES(1)) dut(
+        .clk(clk),.rst(1'b0),.clear(clear),.playing(1'b1),.map_ready(1'b1),
+        .map_bits(walls),.spawn_req(req),.spawn_tile(8'h46),.debug_defeat(1'b0),
+        .move_tick(tick),.spawn_busy(1'b0),.player_tile(p1),.player2_tile(p2),
+        .player_active(live1),.player2_active(live2),.shot_fired(1'b0),.shot_fired_p2(1'b0),
+        .aim(2'd0),.aim_p2(2'd0),.spawn_ack(ack),.render_x(x),
+        .occupied(occupied),.spawn_occupied(reserved),.read_id(1'b0));
+    task sweep;
+        begin
+            @(negedge clk);
+            while(!dut.field_ready) @(negedge clk);
+            tick=1; @(negedge clk); tick=0;
+            while(dut.move_state!=0) @(negedge clk);
+        end
+    endtask
+    task spawn;
+        begin
+            clear=1; @(negedge clk); clear=0;
+            req=1; @(negedge clk);
+            if(!ack) $fatal(1,"fractional spawn rejected");
+            req=0; @(negedge clk);
+        end
+    endtask
+    initial begin
+        for(i=1;i<13;i=i+1) walls[8'h40+i]=0;
+        repeat(2) @(negedge clk);
+        spawn();
+        repeat(5) sweep();
+        if(x>=12'h680) $fatal(1,"zombie did not initially move toward nearer P1");
+        before_turn=x;
+        live1=0; sweep();
+        if(x<=before_turn) $fatal(1,"fractional zombie kept walking toward downed P1");
+        repeat(65) sweep();
+        if(x<=12'h780 || reserved[8'h45]) $fatal(1,"zombie failed to pursue P2 or release its old route");
+
+        p1=8'h42; p2=8'h48; live1=1;
+        spawn();
+        repeat(20) sweep(); // Cross into the destination half of the segment.
+        if(!occupied[8'h47]) $fatal(1,"test did not reach destination half");
+        before_turn=x;
+        live2=0; sweep();
+        if(x>=before_turn) $fatal(1,"fractional zombie kept walking toward downed P2");
+
+        p1=8'h44; p2=8'h49; live2=1;
+        spawn();
+        repeat(5) sweep();
+        before_turn=x;
+        p1=8'h41; sweep();
+        if(x<=before_turn) $fatal(1,"zombie did not retarget after a living player changed tiles");
+        done=1;
+    end
 endmodule

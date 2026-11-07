@@ -98,6 +98,7 @@ Bitstream. Program the same bitstream onto every board.
 | SW15 up, then down | Reset to title |
 | Seven-segment display | Map seed; in a 2-player game: own wave (left) and partner wave (right) |
 | LED15 / LED14-12 | Link up / partner's hearts during a 2-player game |
+| LED10 / LED9 | UART or packet error / status sequence gap, latched until reset |
 
 ### One player
 
@@ -109,27 +110,31 @@ random map is used each game.
 Connect JC1 (TX, K17) of each board to JC2 (RX, M18) of the other, and GND to
 GND. LED15 and `LINKED` on the title show the link is up.
 
-Each board plays its **own complete game** (own zombies, waves, hearts, gun
-and controls) on the **same map**, like a survival race:
+Both players are in **one shared game**: the same map, the same zombies.
 
 1. On either board select **2 PLAYERS** and start. Without the link the title
    shows `NO LINK TO P2` and will not start.
 2. The other board, if it is on its title screen, joins automatically: it
-   builds the same map from the starting board's seed and starts its own run.
-   If both boards start at the same moment, one of them is picked to choose
-   the map and the other joins it.
-3. While both of you are playing you can see your partner: a blue-shirted
-   figure in your 3D view (hidden behind walls like the zombies) and a yellow
-   tile on the SW0 map. The seven-segment display shows your wave and your
-   partner's wave, and LED14-12 show your partner's hearts. Zombies are not
-   shared: each board's zombies only chase that board's player.
-4. Each run ends on its own (game over or victory); the other board keeps
-   playing. The end screen shows `PARTNER WAVE nn` (green while the partner
-   is still playing).
+   builds the same map from the starting board's seed and spawns on the map's
+   second spawn tile. If both boards start at the same moment, one of them is
+   picked to run the game and the other joins it.
+3. The starting board runs the waves and the zombies for both players. Zombies
+   chase whichever player is nearer (by walking distance) and attack either
+   one; shots from both boards hit them. The other board draws the same
+   zombies and sends its position, view angle and shots.
+4. You see your partner as a blue-shirted figure in your 3D view (hidden
+   behind walls like the zombies) and as a yellow tile on the SW0 map.
+   LED14-12 show your partner's hearts.
+5. Each player has three hearts. A player who is down is frozen (cannot move
+   or shoot) while the partner fights on. The run ends for both boards when
+   both players are down (GAME OVER) or after the last wave (VICTORY).
+6. If the link is lost, the starting board carries on alone and the other
+   board ends its run.
 
-The link only carries a status word every 20 ms (state, 2-player flag,
-leader flag, game token, start priority, map seed, wave, hearts, position and
-view angle). See
+The link carries a CRC-protected status word from each board every 20 ms,
+plus a matching zombie snapshot from the leader during a shared run. Follower
+shots retain their firing pose and are retried until acknowledged. Both
+boards must use the same updated game bitstream. See
 [docs/multiplayer-link.md](docs/multiplayer-link.md).
 
 Menus, generating screen, hearts, ten waves,
@@ -263,6 +268,11 @@ routing, utilization, timing and CDC reports under `build/renderer_hardware/`.
 No board verification is implied by these simulations. See DeveloperGuide.md
 for the current integration results and remaining hardware checks.
 
+Run `./tests/run_priority_one_checks.ps1` for UART and packet regressions,
+two-player spawn distances, shot queue ordering, and a two-board simulation
+that drops shot and acknowledgement packets. The hardware check uses both
+game constraint files and reports hierarchical usage and the worst paths.
+
 Run `./sim/enemy/run.ps1` for enemy lifecycle, combat, two-player host logic,
 wave/reset and legacy sprite regression checks, plus circle tangencies and
 misses, lookahead turns, diagonal BFS against an independent shortest-hop
@@ -295,3 +305,29 @@ asynchronous external inputs requiring board/peripheral review. No bitstream
 was generated and no board test was performed; mouse, OLED and gameplay checks
 on the physical Basys 3 remain outstanding. The routed timing margin is small,
 so repeat implementation checks after further RTL or constraint changes.
+
+### Priority-one validation (7 November 2026)
+
+Vivado 2025.2 routed `My_Top_Module` at 100 MHz with both game constraint
+files. The baseline is `timing-fix` at `7444b0f`; the comparison includes
+the timing, fair spawning and reliable shot changes together.
+
+| Routed metric | Baseline | With fixes |
+|---|---:|---:|
+| Worst setup slack | -2.430 ns | +0.123 ns |
+| Worst hold slack | +0.003 ns | +0.055 ns |
+| Failing setup endpoints | 107 | 0 |
+| Slice LUTs | 17,787 (85.51%) | 15,403 (74.05%) |
+| Slice registers | 11,994 (28.83%) | 8,220 (19.76%) |
+| Block RAM tiles | 1 (2%) | 2.5 (5%) |
+| DSPs | 20 | 21 |
+
+The BFS queues for enemy navigation, map validation and spawn search use
+block RAM. Timing fixes also register session-timer control, weapon requests
+and enemy steering and contact data. No internal timing paths were removed
+from analysis; the routed timing report has no unconstrained internal endpoints.
+
+The 12 enemy simulations, packet and spawn checks, two-board loss and rejoin
+test, and affected gameplay and OLED checks passed. Baseline and final reports
+are in `build/priority_one_baseline/reports/` and `build/priority_one_r4/reports/`.
+Physical board testing remains to be done.

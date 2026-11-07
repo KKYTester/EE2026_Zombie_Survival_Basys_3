@@ -22,7 +22,7 @@ module flow_field(
     // Nine-bit indices distinguish an empty queue from 256 queued entries.
     reg [8:0] head, tail;
     reg [255:0] visited;
-    reg [7:0] queue [0:255];
+    (* ram_style="block" *) reg [7:0] queue [0:255];
     reg [2:0] arrows [0:255];
 
     wire same_goals = field_active==goal_active && field_active2==goal2_active &&
@@ -39,11 +39,13 @@ module flow_field(
                            !walls[{next_neighbor[7:4],current[3:0]}]));
     wire discover = building && state==VISIT && neighbor_allowed &&
                     !walls[neighbor] && !visited[neighbor];
+    wire [7:0] queue_write_addr=seed ? 8'd0 : tail[7:0];
+    wire [7:0] queue_write_data=seed ? goal : seed2 ? goal2 : neighbor;
 
     // No memory reset needed. Visited bits qualify every stored arrow.
     always @(posedge clk) begin
-        if(seed) queue[0]<=goal;
-        else if(seed2 || discover) queue[tail[7:0]]<=seed2 ? goal2 : neighbor;
+        // A single write address and synchronous read infer one block RAM.
+        if(seed || seed2 || discover) queue[queue_write_addr]<=queue_write_data;
         if(discover) arrows[neighbor]<=direction ^ 3'b001;
         if(building && state==POP && head!=tail) current<=queue[head[7:0]];
         read_direction<=arrows[read_tile];

@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 module packet_rx #(parameter MAX_PAYLOAD=16, parameter [7:0] START_BYTE=8'hA5,
-    parameter TIMEOUT_CYCLES=100000)(
+    parameter TIMEOUT_CYCLES=100000, parameter USE_CRC16=0)(
     input wire clk, input wire rst,
     input wire [7:0] rx_data, input wire rx_valid, input wire rx_frame_error,
     output reg pkt_valid, output reg pkt_error,
@@ -13,6 +13,10 @@ module packet_rx #(parameter MAX_PAYLOAD=16, parameter [7:0] START_BYTE=8'hA5,
     reg [7:0] type_reg, len_reg, index, checksum;
     reg [8*MAX_PAYLOAD-1:0] payload_reg;
     reg [31:0] gap_count;
+    reg [15:0] crc;
+    reg crc_high_ok;
+    localparam S_CRC_LOW=3'd5;
+    `include "Packet_CRC.vh"
 
     always @(posedge clk) begin
         pkt_valid <= 1'b0;
@@ -22,6 +26,7 @@ module packet_rx #(parameter MAX_PAYLOAD=16, parameter [7:0] START_BYTE=8'hA5,
             type_reg <= 0; len_reg <= 0; index <= 0; checksum <= 0;
             payload_reg <= 0;
             gap_count <= 0;
+            crc <= 16'hffff; crc_high_ok <= 0;
             pkt_type <= 0; pkt_len <= 0; pkt_payload <= 0;
         end else if (state != S_WAIT && (rx_frame_error || gap_count == TIMEOUT_CYCLES-1)) begin
             pkt_error <= 1'b1;
@@ -33,6 +38,7 @@ module packet_rx #(parameter MAX_PAYLOAD=16, parameter [7:0] START_BYTE=8'hA5,
                 S_TYPE: begin
                     type_reg <= rx_data;
                     checksum <= rx_data;
+                    crc <= packet_crc_byte(16'hffff,rx_data);
                     payload_reg <= 0;
                     state <= S_LEN;
                 end
@@ -43,6 +49,7 @@ module packet_rx #(parameter MAX_PAYLOAD=16, parameter [7:0] START_BYTE=8'hA5,
                     end else begin
                         len_reg <= rx_data;
                         checksum <= checksum + rx_data;
+                        crc <= packet_crc_byte(crc,rx_data);
                         index <= 0;
                         state <= (rx_data == 0) ? S_CHECK : S_PAYLOAD;
                     end
@@ -50,19 +57,32 @@ module packet_rx #(parameter MAX_PAYLOAD=16, parameter [7:0] START_BYTE=8'hA5,
                 S_PAYLOAD: begin
                     payload_reg[{index, 3'b000} +: 8] <= rx_data;
                     checksum <= checksum + rx_data;
+                    crc <= packet_crc_byte(crc,rx_data);
                     index <= index + 1'b1;
                     if (index + 1'b1 == len_reg) state <= S_CHECK;
                 end
                 S_CHECK: begin
-                    if (rx_data == checksum) begin
-                        pkt_valid <= 1'b1;
-                        pkt_type <= type_reg;
-                        pkt_len <= len_reg;
-                        pkt_payload <= payload_reg;
+                    if(USE_CRC16) begin
+                        crc_high_ok <= rx_data==crc[15:8];
+                        state <= S_CRC_LOW;
                     end else begin
-                        pkt_error <= 1'b1;
+                        if (rx_data == checksum) begin
+                            pkt_valid <= 1'b1;
+                            pkt_type <= type_reg;
+                            pkt_len <= len_reg;
+                            pkt_payload <= payload_reg;
+                        end else begin
+                            pkt_error <= 1'b1;
+                        end
+                        state <= S_WAIT;
                     end
-                    state <= S_WAIT;
+                end
+                S_CRC_LOW: begin
+                    if(crc_high_ok && rx_data==crc[7:0]) begin
+                        pkt_valid<=1;
+                        pkt_type<=type_reg; pkt_len<=len_reg; pkt_payload<=payload_reg;
+                    end else pkt_error<=1;
+                    state<=S_WAIT;
                 end
                 default: state <= S_WAIT;
             endcase
