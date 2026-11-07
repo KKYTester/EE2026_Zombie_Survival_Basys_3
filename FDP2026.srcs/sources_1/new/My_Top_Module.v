@@ -191,9 +191,15 @@ module My_Top_Module #(
     wire scene_start, display_bank, scene_valid, sprites_ready;
     // Zombies on screen: this board's own, or the leader's on the follower.
     wire [7:0] remote_active = peer_zombies[199:192] & {8{peer_in_run}};
-    wire [7:0] render_active = follower ? remote_active : local_render_active;
-    wire [95:0] render_x = follower ? peer_zombies[95:0] : local_render_x;
-    wire [95:0] render_y = follower ? peer_zombies[191:96] : local_render_y;
+    // Registered (one clock late): keeps the leader flag and the UART data
+    // off the long paths into the sprite renderer and the OLED frame capture.
+    reg [7:0] render_active;
+    reg [95:0] render_x, render_y;
+    always @(posedge clk) begin
+        render_active <= follower ? remote_active : local_render_active;
+        render_x <= follower ? peer_zombies[95:0] : local_render_x;
+        render_y <= follower ? peer_zombies[191:96] : local_render_y;
+    end
     // Sprite slot 8 is the partner (Q8 coordinates, y down like the zombies).
     wire [8:0] sprite_active = {partner_visible, render_active};
     wire [107:0] sprite_x = {partner_x[15:4], render_x};
@@ -266,9 +272,26 @@ module My_Top_Module #(
         if(reset || enemy_clear || move_tick) move_counter<=0;
         else move_counter<=move_counter+1'b1;
     end
+    // Registered zombie controls: the leader flag only changes when a game
+    // starts, so one clock of delay is harmless. max_fanout lets Vivado copy
+    // these flip-flops close to the hundreds of zombie-state registers they
+    // drive (the unregistered version failed timing by ~1.3 ns).
+    (* max_fanout = 32 *) reg enemy_clear_q;
+    (* max_fanout = 32 *) reg enemy_run_q;
+    // Same for the player status inputs, which depend on the 2-player flags.
+    (* max_fanout = 32 *) reg alive_q;
+    (* max_fanout = 32 *) reg partner_in_game_q;
+    reg partner_shot_q;
+    always @(posedge clk) begin
+        enemy_clear_q <= enemy_clear || follower;
+        enemy_run_q <= enemy_playing && !follower;
+        alive_q <= alive;
+        partner_in_game_q <= partner_in_game;
+        partner_shot_q <= partner_shot && partner_in_game;
+    end
     // Zombies (1 PLAYER, or the leader of a shared run): Player 2 is the follower.
     enemy_manager #(.USE_CAMERA_RAY(1),.USE_PLAYER_POSITIONS(1),.TWO_PLAYERS(1)) enemies(
-        .clk(clk),.rst(reset),.clear(enemy_clear || follower),.playing(enemy_playing && !follower),
+        .clk(clk),.rst(reset),.clear(enemy_clear_q),.playing(enemy_run_q),
         .map_ready(map_ready && !map_busy),.map_bits(published_map),
         .spawn_req(spawn_req),.spawn_tile(spawn_tile),.spawn_ack(spawn_ack),
         .spawn_busy(spawn_busy),.enemy_defeated(enemy_defeated),.occupied(occupied),
@@ -279,8 +302,8 @@ module My_Top_Module #(
         .camera_angle(player_angle[9:0]),
         .camera2_x({16'd0,partner_x}),.camera2_y({16'd0,partner_y}),.camera2_angle(partner_angle),
         .shot_hit(),.player_hit(zombie_hit),
-        .player_active(alive),.player2_active(partner_in_game),.player2_tile(partner_tile),
-        .shot_fired_p2(partner_shot && partner_in_game),.aim_p2(2'd0),.shot_ready(),.shot_ready_p2(),
+        .player_active(alive_q),.player2_active(partner_in_game_q),.player2_tile(partner_tile),
+        .shot_fired_p2(partner_shot_q),.aim_p2(2'd0),.shot_ready(),.shot_ready_p2(),
         .shot_hit_player(),.player_hit_p2(zombie_hit_p2),.active(local_render_active),
         .render_x(local_render_x),.render_y(local_render_y),.spawn_occupied(spawn_occupied),.read_id(3'd0),
         .read_active(),.read_x(),.read_y(),.read_hp(),.read_type(),.read_state(),.read_cooldown());
